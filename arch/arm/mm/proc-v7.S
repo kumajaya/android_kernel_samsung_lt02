@@ -57,7 +57,7 @@ ENTRY(cpu_v7_reset)
  THUMB(	bic	r1, r1, #1 << 30 )		@ SCTLR.TE (Thumb exceptions)
 	mcr	p15, 0, r1, c1, c0, 0		@ disable MMU
 	isb
-	mov	pc, r0
+	bx	r0
 ENDPROC(cpu_v7_reset)
 	.popsection
 
@@ -171,62 +171,68 @@ __v7_ca15mp_setup:
 	orreq	r0, r0, r10			@ Enable CPU-specific SMP bits
 	mcreq	p15, 0, r0, c1, c0, 1
 #endif
+	b	__v7_setup
+
+__v7_pj4b_setup:
+#ifdef CONFIG_CPU_PJ4B
+
+/* Auxiliary Debug Modes Control 1 Register */
+#define PJ4B_STATIC_BP (1 << 2) /* Enable Static BP */
+#define PJ4B_INTER_PARITY (1 << 8) /* Disable Internal Parity Handling */
+#define PJ4B_BCK_OFF_STREX (1 << 5) /* Enable the back off of STREX instr */
+#define PJ4B_CLEAN_LINE (1 << 16) /* Disable data transfer for clean line */
+
+/* Auxiliary Debug Modes Control 2 Register */
+#define PJ4B_FAST_LDR (1 << 23) /* Disable fast LDR */
+#define PJ4B_SNOOP_DATA (1 << 25) /* Do not interleave write and snoop data */
+#define PJ4B_CWF (1 << 27) /* Disable Critical Word First feature */
+#define PJ4B_OUTSDNG_NC (1 << 29) /* Disable outstanding non cacheable rqst */
+#define PJ4B_L1_REP_RR (1 << 30) /* L1 replacement - Strict round robin */
+#define PJ4B_AUX_DBG_CTRL2 (PJ4B_SNOOP_DATA | PJ4B_CWF |\
+			    PJ4B_OUTSDNG_NC | PJ4B_L1_REP_RR)
+
+/* Auxiliary Functional Modes Control Register 0 */
+#define PJ4B_SMP_CFB (1 << 1) /* Set SMP mode. Join the coherency fabric */
+#define PJ4B_L1_PAR_CHK (1 << 2) /* Support L1 parity checking */
+#define PJ4B_BROADCAST_CACHE (1 << 8) /* Broadcast Cache and TLB maintenance */
+
+/* Auxiliary Debug Modes Control 0 Register */
+#define PJ4B_WFI_WFE (1 << 22) /* WFI/WFE - serve the DVM and back to idle */
+
+	/* Auxiliary Debug Modes Control 1 Register */
+	mrc	p15, 1,	r0, c15, c1, 1
+	orr     r0, r0, #PJ4B_CLEAN_LINE
+	orr     r0, r0, #PJ4B_BCK_OFF_STREX
+	orr     r0, r0, #PJ4B_INTER_PARITY
+	bic	r0, r0, #PJ4B_STATIC_BP
+	mcr	p15, 1,	r0, c15, c1, 1
+
+	/* Auxiliary Debug Modes Control 2 Register */
+	mrc	p15, 1,	r0, c15, c1, 2
+	bic	r0, r0, #PJ4B_FAST_LDR
+	orr	r0, r0, #PJ4B_AUX_DBG_CTRL2
+	mcr	p15, 1,	r0, c15, c1, 2
+
+	/* Auxiliary Functional Modes Control Register 0 */
+	mrc	p15, 1,	r0, c15, c2, 0
+#ifdef CONFIG_SMP
+	orr	r0, r0, #PJ4B_SMP_CFB
+#endif
+	orr	r0, r0, #PJ4B_L1_PAR_CHK
+	orr	r0, r0, #PJ4B_BROADCAST_CACHE
+	mcr	p15, 1,	r0, c15, c2, 0
+
+	/* Auxiliary Debug Modes Control 0 Register */
+	mrc	p15, 1,	r0, c15, c1, 0
+	orr	r0, r0, #PJ4B_WFI_WFE
+	mcr	p15, 1,	r0, c15, c1, 0
+
+#endif /* CONFIG_CPU_PJ4B */
+
 __v7_setup:
-#if defined(CONFIG_CPU_PJ4B) && defined(CONFIG_NEON)
-	mrc	p15, 1, r0, c15, c1, 1
-	orr	r0, r0, #(1 << 11)		@ PJ4B NEON enable bit
-	mcr	p15, 1, r0, c15, c1, 1
-#endif
-#if defined(CONFIG_CPU_MMP3) && defined(CONFIG_NEON)
-	mrc	p15, 0, r5, c1, c0, 2		@ Read coprocessor access
-	mov	r0, r5
-	orr	r0, r0, #0x00f00000		@ Allow access to cp10 and cp11
-	mcr	p15, 0, r0, c1, c0, 2		@ Enable CP10, CP11 coprocessor access
-	mov	r0, #0
-	mcr	p15, 0, r0, c7, c5, 4		@ Flush prefetch buffer
-	mrc	p10, 7, r0, c8, c0, 0
-	orr	r0, r0, #0x40000000
-	mcr	p10, 7, r0, c8, c0, 0		@ Enable FPEXC.EN bit
-	isb
-	mov	r0, #1
-	mcr	p10, 7, r0, c9, c0, 0		@ Enable dual-issue feature in FPCFG.bit0
-	/* Continuous 6 VMOV instructions to initialize the unused second pipe */
-	.word	0xeeb00b00			@ VMOV.F64 d0, #2.00000000
-	.word	0xeeb00b00
-	.word	0xeeb00b00
-	.word	0xeeb00b00
-	.word	0xeeb00b00
-	.word	0xeeb00b00
-	mov	r0, #0
-	mcr	p10, 7, r0, c9, c0, 0		@ Disable dual-issue feature in FPCFG.bit0
-	isb
-	mrc	p10, 7, r0, c8, c0, 0
-	bic	r0, r0, #0x40000000
-	mcr	p10, 7, r0, c8, c0, 0		@ Disable FPEXC.EN bit
-	mcr	p15, 0, r5, c1, c0, 2		@ Disable CP10, CP11 coprocessor access
-	mov	r0, #0
-	mcr	p15, 0, r0, c7, c5, 4		@ Flush prefetch buffer
-#endif
-
-#ifdef CONFIG_PJ4_RETURNSTACK_ISSUE
-	mrc	p15, 1, r0, c15, c1, 1
-	bic	r0, r0, #0x1			@disable return stack
-	mcr	p15, 1, r0, c15, c1, 1
-#endif
-
-#ifdef CONFIG_PJ4B_ERRATA_6409
-	mrc	p15, 1, r0, c15, c1, 1
-	bic	r0, r0, #0x4			@ Disable Static BP
-	mcr	p15, 1, r0, c15, c1, 1
-#endif
-#ifdef CONFIG_DISABLE_CWF
-	mrc	p15, 1, r0, c15, c1, 2
-	orr	r0, r0, #(1 << 27)
-	mcr	p15, 1, r0, c15, c1, 2
-#endif
 	adr	r12, __v7_setup_stack		@ the local stack
 	stmia	r12, {r0-r5, r7, r9, r11, lr}
-	bl	v7_flush_dcache_all
+	bl      v7_flush_dcache_louis
 	ldmia	r12, {r0-r5, r7, r9, r11, lr}
 
 	mrc	p15, 0, r0, c0, c0, 0		@ read main ID register
@@ -242,7 +248,8 @@ __v7_setup:
 	ldr	r10, =0x00000c08		@ Cortex-A8 primary part number
 	teq	r0, r10
 	bne	2f
-#ifdef CONFIG_ARM_ERRATA_430973
+#if defined(CONFIG_ARM_ERRATA_430973) && !defined(CONFIG_ARCH_MULTIPLATFORM)
+
 	teq	r5, #0x00100000			@ only present in r1p*
 	mrceq	p15, 0, r10, c1, c0, 1		@ read aux control register
 	orreq	r10, r10, #(1 << 6)		@ set IBE to 1
@@ -398,15 +405,14 @@ __v7_ca9mp_proc_info:
 	.size	__v7_ca9mp_proc_info, . - __v7_ca9mp_proc_info
 
 	/*
-	 * Marvell. PJ4B processor.
+	 * Marvell PJ4B processor.
 	 */
-	.type  __v7_pj4b_proc_info, #object
+	.type   __v7_pj4b_proc_info, #object
 __v7_pj4b_proc_info:
-	.long  0x562f5840
-	.long  0xfffffff0
-	/* It can used same set up function as ca9mp */
-	__v7_proc __v7_ca9mp_setup
-	.size	__v7_pj4_proc_info, . - __v7_pj4_proc_info
+	.long	0x562f5840
+	.long	0xfffffff0
+	__v7_proc __v7_pj4b_setup
+	.size	__v7_pj4b_proc_info, . - __v7_pj4b_proc_info
 #endif	/* CONFIG_ARM_LPAE */
 
 	/*
