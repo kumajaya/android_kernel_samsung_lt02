@@ -178,6 +178,9 @@ config SAMSUNG_PRODUCT_SHIP
 config SEC_DEBUG_LEVEL
 	int "set up debug level"
 	default 1
+config SAMSUNG_EXFAT
+	bool "Support exFAT filesystem driver"
+	default y
 endmenu
 
 config CPU_PXA168
