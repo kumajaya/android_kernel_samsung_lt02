@@ -619,11 +619,10 @@ static int sr130pc10_i2c_wrt_list( struct i2c_client *client, const u16 *regs,
 
 	int i;
 	u8 m_delay = 0;
-
 	u16 temp_packet;
 
+	printk("sr130pc10_i2c_wrt_list : %s, size=%d\n", name, size);
 
-	CAM_DEBUG("%s, size=%d", name, size);
 	for (i = 0; i < size; i++) {
 		temp_packet = regs[i];
 
@@ -1941,9 +1940,17 @@ static int sr130pc10_set_still_status(void)
 static int sr130pc10_set_preview_status(int value)
 {
 	struct sr130pc10_sensor *sensor = &sr130pc10;
+
+	sensor->vtmode = 0; // Init VT mode
+
 	Cam_Printk(KERN_NOTICE "sr130pc10_set_preview_status value : 0x%x \n", value);
 
-	if(0 == (value & 0x00ff)){
+	if(2 == ((value>>8) & 0x00ff)){
+		Cam_Printk(KERN_NOTICE "sr130pc10_set_preview_status : VT mode\n");
+		sr130pc10_cam_state = SR130PC10_STATE_CAMCORDER;
+		sensor->vtmode = (value >> 8);
+	}
+	else if(0 == (value & 0x00ff)){
 		Cam_Printk(KERN_NOTICE "sr130pc10_set_preview_status : SR130PC10_STATE_PREVIEW state\n");
 	sr130pc10_cam_state = SR130PC10_STATE_PREVIEW;
 	}
@@ -1954,11 +1961,6 @@ static int sr130pc10_set_preview_status(int value)
 	else{
 		Cam_Printk(KERN_ERR "sr130pc10_set_preview_status : Unknown cam state\n");
 	}
-	if( value & 0xff00) { /* VT mode check */
-		printk("[%s][%d] vtmode : %d\n",__func__, __LINE__, value >> 8);
-		sensor->vtmode = (value >> 8);
-	}
-
 
 	return 0;
 }
@@ -2095,16 +2097,6 @@ int sr130pc10_streamon(struct i2c_client *client)
 			printk("[%s][%d] vtmode = %d\n",
 					__func__, __LINE__, sensor->vtmode);
 			sr130pc10_WRT_LIST(client,sr130pc10_VT_Init_Reg);
-
-			Cam_Printk(KERN_NOTICE "sr130pc10_vt_init start read check\n");
-
-			sr130pc10_reg_read_and_check(client, 0x10, 0x60);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x61);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x62);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x63);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x64);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x66);
-			sr130pc10_reg_read_and_check(client, 0x10, 0x67);
 			break;
 		default:
 			break;
@@ -2112,8 +2104,17 @@ int sr130pc10_streamon(struct i2c_client *client)
 
 	Cam_Printk(KERN_NOTICE "sr130pc10_streamon is called...\n");
 
-	//if(pix->pixelformat == V4L2_PIX_FMT_JPEG)
-	if(sr130pc10_cam_state == SR130PC10_STATE_CAPTURE)
+	if(2 == sensor->vtmode){
+		if(sensor->record_width == 352 && sensor->record_height == 288){
+			sr130pc10_WRT_LIST(client, sr130pc10_fps_15fix_352X288);
+			Cam_Printk(KERN_NOTICE "352x288 VT mode: set stream-on setting\n");
+		}
+		else if(sensor->record_width == 176 && sensor->record_height == 144){
+			sr130pc10_WRT_LIST(client, sr130pc10_fps_15fix_176X144);
+			Cam_Printk(KERN_NOTICE "176x144 VT mode: set stream-on setting\n");
+		}
+	}
+	else if(sr130pc10_cam_state == SR130PC10_STATE_CAPTURE)
 	{
 		Cam_Printk(KERN_NOTICE "capture: set stream-on setting\n");
 		if(pix->width == 1280 && pix->height == 960){
@@ -2171,7 +2172,7 @@ int sr130pc10_streamon(struct i2c_client *client)
 		}
 		else if(sensor->jpeg_capture_w == 176 && sensor->jpeg_capture_h == 144){
 			Cam_Printk(KERN_NOTICE "preview: set stream-on setting: 176x144 preview\n");
-			sr130pc10_WRT_LIST(client, sr130pc10_176X144_Preview);
+			sr130pc10_WRT_LIST(client, sr130pc10_fps_15fix_176X144);
 		}
 		else{
 			Cam_Printk(KERN_NOTICE "preview: Unsupported preview setting: %dx%d preview\n", sensor->jpeg_capture_w, sensor->jpeg_capture_h);
@@ -2760,7 +2761,7 @@ static int sr130pc10_command(struct i2c_client *client, unsigned int cmd, void *
 static ssize_t front_camera_fw_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%s", "SR130PC10_SR130PC10\n");
+	return sprintf(buf, "%s", "SR130PC10 SR130PC10\n");
 }
 
 static ssize_t front_camera_type_show(struct device *dev,

@@ -252,19 +252,21 @@ static int smb358_get_charging_health(struct i2c_client *client)
 	u8 data_c = 0;
 	u8 data_d = 0;
 	u8 data_e = 0;
+	u8 comm_a = 0;
 
 	smb358_i2c_read(client, SMB358_STATUS_A, &data_a);
 	smb358_i2c_read(client, SMB358_STATUS_B, &data_b);
 	smb358_i2c_read(client, SMB358_STATUS_C, &data_c);
 	smb358_i2c_read(client, SMB358_STATUS_D, &data_d);
 	smb358_i2c_read(client, SMB358_STATUS_E, &data_e);
+	smb358_i2c_read(client, SMB358_COMMAND_A, &comm_a);
 	dev_info(&client->dev,
 		 "%s : charger status A(0x%02x) B(0x%02x) C(0x%02x) "
 		 "D(0x%02x) E(0x%02x)\n",__func__, data_a, data_b,
 		 data_c, data_d, data_e);
 
 	/* Is enabled ? */
-	if (data_c & 0x01) {
+	if ((data_c & 0x01) || (comm_a & 0x02)) {
 		smb358_i2c_read(client, SMB358_INTERRUPT_STATUS_E, &data_e);
 		dev_dbg(&client->dev,
 			"%s : charger intterupt status E(0x%02x)\n",
@@ -497,14 +499,12 @@ static void smb358_charger_function_control(
 
 		/* [STEP - 5] =============================================== */
 		dev_info(&client->dev, "%s : input current (%dmA)\n",
-			__func__, charger->pdata->charging_current
-			[charger->cable_type].input_current_limit);
+			 __func__, charger->input_current);
 		/* Input current limit */
 		data = 0x00;
 		data |= smb358_get_input_current_limit_data(
 			charger,
-			charger->pdata->charging_current
-			[charger->cable_type].input_current_limit);
+			charger->input_current);
 		smb358_set_command(client,
 			SMB358_INPUT_CURRENTLIMIT, data);
 

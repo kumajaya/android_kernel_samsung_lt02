@@ -326,18 +326,28 @@ void fsa9480_set_vaudio(void)
 	u8 mansw1;
 	u8 value;
 
-	if (usbsw->id != muic_list[0].id)
-		return;
-
 	if (!audio_state) {
-		fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
-		fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
+		if (usbsw->id == muic_list[1].id) {
+			/* TSU6721 Chip Default : 365K --> Audio ON */
+			fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
+			fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
 
-		mansw1 |= VAAUDIO_TSU6721;
-		value &= ~MANUAL_SWITCH;
+			mansw1 &= AUTO;
+			value |= MANUAL_SWITCH;
 
-		fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
-		fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+			fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
+			fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+		} else {
+			/* SM5502 */
+			fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
+			fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
+
+			mansw1 |= VAAUDIO_TSU6721;
+			value &= ~MANUAL_SWITCH;
+
+			fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
+			fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+		}
 		audio_state = 1;
 	}
 }
@@ -352,18 +362,30 @@ void fsa9480_disable_vaudio(void)
 	u8 mansw1;
 	u8 value;
 
-	if (usbsw->id != muic_list[0].id)
-		return;
-
 	if (audio_state) {
-		fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
-		fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
+		if (usbsw->id == muic_list[1].id) {
+			/* TSU6721 Chip Default : 365K --> Audio ON
+			 * So, Manually Open the Switch
+			*/
+			fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
+			fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
 
-		mansw1 &= AUTO;
-		value |= MANUAL_SWITCH;
+			mansw1 = 0x01;
+			value &= ~MANUAL_SWITCH;
 
-		fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
-		fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+			fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
+			fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+		} else {
+			/* SM5502 */
+			fsa9480_read_reg(client, FSA9480_REG_CTRL, &value);
+			fsa9480_read_reg(client, FSA9480_REG_MANSW1, &mansw1);
+
+			mansw1 &= AUTO;
+			value |= MANUAL_SWITCH;
+
+			fsa9480_write_reg(client, FSA9480_REG_MANSW1, mansw1);
+			fsa9480_write_reg(client, FSA9480_REG_CTRL, value);
+		}
 		audio_state = 0;
 	}
 }
@@ -1061,11 +1083,8 @@ static void fsa9480_detect_dev_ti(struct fsa9480_usbsw *usbsw, int intrs)
 			printk(KERN_INFO "[FSA9480] DESKDOCK ATTACHED*****\n");
 			/* Dock */
 			switch_set_state(&usbsw->dock_dev, 1);
-			if (jack_is_detected) {
-				fsa9480_disable_vaudio();
-			} else {
-				fsa9480_set_vaudio();
-			}
+			if (jack_is_detected)
+				fsa9480_disable_vaudio();			
 		}
 		if (val3 & FSA9480_DEV_T3_DESKDOCK_VB_MASK) {
 			dev_classifi = CABLE_TYPE3_DESKDOCK_VB_MUIC;
@@ -1073,11 +1092,8 @@ static void fsa9480_detect_dev_ti(struct fsa9480_usbsw *usbsw, int intrs)
 			       "[FSA9480] DESKDOCK+VBUS ATTACHED*****\n");
 			/* Dock */
 			switch_set_state(&usbsw->dock_dev, 1);
-			if (jack_is_detected) {
+			if (jack_is_detected) 
 				fsa9480_disable_vaudio();
-			} else {
-				fsa9480_set_vaudio();
-			}
 		}
 		if (adc == 0x10) {
 			dev_classifi = CABLE_TYPE2_DESKDOCK_MUIC;
@@ -1152,14 +1168,16 @@ static void fsa9480_detect_dev_ti(struct fsa9480_usbsw *usbsw, int intrs)
 			printk(KERN_INFO "[FSA9480] DESKDOCK DETACHED*****\n");
 			/* Dock */
 			switch_set_state(&usbsw->dock_dev, 0);
-			fsa9480_disable_vaudio();
+			if (jack_is_detected)
+				fsa9480_set_vaudio();
 		}
 		if (usbsw->dev3 & FSA9480_DEV_T3_DESKDOCK_VB_MASK) {
 			printk(KERN_INFO
 			       "[FSA9480] DESKDOCK+VBUS DETTACHED*****\n");
 			/* Dock */
 			switch_set_state(&usbsw->dock_dev, 0);
-			fsa9480_disable_vaudio();
+			if (jack_is_detected)
+				fsa9480_set_vaudio();
 		}
 		if (usbsw->adc == 0x10) {
 			dev_classifi = CABLE_TYPE2_DESKDOCK_MUIC;
@@ -1190,6 +1208,18 @@ static void fsa9480_detect_dev_ti(struct fsa9480_usbsw *usbsw, int intrs)
 		blocking_notifier_call_chain(&usb_switch_notifier,
 					     CABLE_TYPE_NONE_MUIC, NULL);
 	}
+
+	/* Bug Case WorkAround */
+	if (!intr1 && !intr2) {
+		if (!val1 && !val2 && !val3) {
+			printk(KERN_INFO "[FSA9480](BUG Case)Accessory DETACHED*****\n");
+			/* for Charger driver */
+			if (pdata->charger_cb)
+				pdata->charger_cb(CABLE_TYPE_NONE_MUIC);
+			blocking_notifier_call_chain(&usb_switch_notifier,
+						     CABLE_TYPE_NONE_MUIC, NULL);
+		}
+	}		
 
 	usbsw->dev1 = val1;
 	usbsw->dev2 = val2;

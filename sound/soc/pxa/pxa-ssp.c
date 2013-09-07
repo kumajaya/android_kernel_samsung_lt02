@@ -51,6 +51,7 @@ struct ssp_priv {
 	unsigned int sysclk;
 	int dai_fmt;
 	u32 rate;
+	int clk_count;
 #ifdef CONFIG_PM
 	uint32_t	cr0;
 	uint32_t	cr1;
@@ -126,6 +127,7 @@ static int pxa_ssp_startup(struct snd_pcm_substream *substream,
 	if (!cpu_dai->active) {
 		clk_enable(ssp->clk);
 		pxa_ssp_disable(ssp);
+		priv->clk_count = 0;
 	}
 
 	dma = kzalloc(sizeof(struct pxa2xx_pcm_dma_data), GFP_KERNEL);
@@ -160,8 +162,12 @@ static int pxa_ssp_suspend(struct snd_soc_dai *cpu_dai)
 	struct ssp_priv *priv = snd_soc_dai_get_drvdata(cpu_dai);
 	struct ssp_device *ssp = priv->ssp;
 
-	if (!cpu_dai->active)
-		clk_enable(ssp->clk);
+	/*
+	 * do not handle GSSP scenario, due to 1) GSSP clock is closed
+	 * before suspend, 2) CP GSSP may work in AP suspend mode.
+	 */
+	if (ssp->port_id != 2) //KSND patch for avoid Call mute
+		return 0;
 
 	priv->cr0 = __raw_readl(ssp->mmio_base + SSCR0);
 	priv->cr1 = __raw_readl(ssp->mmio_base + SSCR1);
@@ -170,6 +176,8 @@ static int pxa_ssp_suspend(struct snd_soc_dai *cpu_dai)
 
 	pxa_ssp_disable(ssp);
 	clk_disable(ssp->clk);
+	clk_set_rate(ssp->clk, 0);
+
 	return 0;
 }
 
@@ -179,6 +187,10 @@ static int pxa_ssp_resume(struct snd_soc_dai *cpu_dai)
 	struct ssp_device *ssp = priv->ssp;
 	uint32_t sssr = SSSR_ROR | SSSR_TUR | SSSR_BCE;
 
+	if (ssp->port_id != 2) //KSND patch for avoid Call mute
+		return 0;
+
+	clk_set_rate(ssp->clk, priv->rate);
 	clk_enable(ssp->clk);
 
 	__raw_writel(sssr, ssp->mmio_base + SSSR);
@@ -684,13 +696,36 @@ static int pxa_ssp_hw_params(struct snd_pcm_substream *substream,
 }
 
 static void pxa_ssp_set_running_bit(struct snd_pcm_substream *substream,
-				    struct ssp_device *ssp, int value)
+				    struct ssp_priv *priv, int value)
 {
+	struct ssp_device *ssp = priv->ssp;
 	uint32_t sscr0 = pxa_ssp_read_reg(ssp, SSCR0);
 	uint32_t sscr1 = pxa_ssp_read_reg(ssp, SSCR1);
+#if 0
 	uint32_t sspsp = pxa_ssp_read_reg(ssp, SSPSP);
 	uint32_t sssr = pxa_ssp_read_reg(ssp, SSSR);
+#endif
 
+	if (value && (priv->clk_count == 0))
+		pxa_ssp_write_reg(ssp, SSCR0, sscr0 | SSCR0_SSE);
+	else if (!value && (priv->clk_count == 1)) {
+		pxa_ssp_write_reg(ssp, SSCR1,
+			sscr1 & ~(SSCR1_SCLKDIR | SSCR1_SFRMDIR));
+		pxa_ssp_write_reg(ssp, SSCR0, sscr0 & ~SSCR0_SSE);
+	}
+
+	/* the max enable count is 2 for both playback & capture */
+	if (value) {
+		priv->clk_count++;
+		if (priv->clk_count > 2)
+			priv->clk_count = 2;
+	} else {
+		priv->clk_count--;
+		if (priv->clk_count < 0)
+			priv->clk_count = 0;
+	}
+
+#if 0
 	if (value && (sscr0 & SSCR0_SSE))
 		pxa_ssp_write_reg(ssp, SSCR0, sscr0 & ~SSCR0_SSE);
 
@@ -717,6 +752,7 @@ static void pxa_ssp_set_running_bit(struct snd_pcm_substream *substream,
 			sscr1 & ~(SSCR1_SCLKDIR | SSCR1_SFRMDIR));
 		pxa_ssp_write_reg(ssp, SSCR0, sscr0 & ~SSCR0_SSE);
 	}
+#endif
 }
 
 static int pxa_ssp_trigger(struct snd_pcm_substream *substream, int cmd,
@@ -744,7 +780,7 @@ static int pxa_ssp_trigger(struct snd_pcm_substream *substream, int cmd,
 		pm_qos_update_request(&priv->idle, ssp_qos);
 		clk_set_rate(ssp->clk, priv->rate);
 #endif
-		pxa_ssp_set_running_bit(substream, ssp, 1);
+		pxa_ssp_set_running_bit(substream, priv, 1);
 		val = pxa_ssp_read_reg(ssp, SSSR);
 		pxa_ssp_write_reg(ssp, SSSR, val);
 		break;
@@ -753,12 +789,14 @@ static int pxa_ssp_trigger(struct snd_pcm_substream *substream, int cmd,
 		pm_qos_update_request(&priv->idle, ssp_qos);
 		clk_set_rate(ssp->clk, priv->rate);
 #endif
-		pxa_ssp_set_running_bit(substream, ssp, 1);
+		pxa_ssp_set_running_bit(substream, priv, 1);
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
-		pxa_ssp_set_running_bit(substream, ssp, 0);
+		if (ssp->port_id != 2)
+			pxa_ssp_set_running_bit(substream, priv, 0);
 #ifdef CONFIG_CPU_PXA988
-		clk_set_rate(ssp->clk, 0);
+		if (ssp->port_id != 2)
+			clk_set_rate(ssp->clk, 0);
 		pm_qos_update_request(&priv->idle,
 				PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
 #endif
@@ -772,7 +810,7 @@ static int pxa_ssp_trigger(struct snd_pcm_substream *substream, int cmd,
 #endif
 		break;
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		pxa_ssp_set_running_bit(substream, ssp, 0);
+		pxa_ssp_set_running_bit(substream, priv, 0);
 #ifdef CONFIG_CPU_PXA988
 		clk_set_rate(ssp->clk, 0);
 		pm_qos_update_request(&priv->idle,

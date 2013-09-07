@@ -189,98 +189,100 @@ struct sec_fg_info {
 };
 
 typedef struct  {
-  /* STC311x data */
-  int STC_Status;  /* status word  */
-  int Vmode;       /* 1=Voltage mode, 0=mixed mode */
-  int Voltage;     /* voltage in mV            */
-  int Current;     /* current in mA            */
-  int Temperature; /* temperature in 0.1C     */
-  int HRSOC;       /* uncompensated SOC in 1/512%   */
-  int OCV;         /* OCV in mV*/
-  int ConvCounter; /* convertion counter       */
-  int RelaxTimer;  /* current relax timer value */
-  int CC_adj;      /* CC adj */
-  int VM_adj;      /* VM adj */
-  /* results & internals */
-  int SOC;         /* compensated SOC in 0.1% */
-  int AvgSOC;      /* in 0.1% */
-  int AvgVoltage;
-  int AvgCurrent;
-  int AvgTemperature;
-  int AccSOC;
-  int AccVoltage;
-  int AccCurrent;
-  int AccTemperature;
-  int BattState;
-  int GG_Mode;     /* 1=VM active, 0=CC active */
-  int LastMode;
-  int LastSOC;
-  int LastTemperature;
-  int BattOnline;	// BATD
-  int IDCode;
-  /* parameters */
-  int Alm_SOC;     /* SOC alm level in % */
-  int Alm_Vbat;    /* Vbat alm level in mV */
-  int CC_cnf;      /* nominal CC_cnf */
-  int VM_cnf;      /* nominal VM cnf */
-  int Cnom;        /* nominal capacity is mAh */
-  int Rsense;      /* sense resistor in milliOhms */
-  int CurrentFactor;
-  int RelaxThreshold;   /* current threshold for VM (mA)  */
-  int Adaptive;     /* adaptive mode */
-  int VM_TempTable[NTEMP];
-  int CapacityDerating[NTEMP];
-  char OCVOffset[OCVTAB_SIZE];
-  char OCVOffset2[OCVTAB_SIZE];
+	/* STC311x data */
+	int STC_Status;  /* status word  */
+	int Vmode;       /* 1=Voltage mode, 0=mixed mode */
+	int Voltage;     /* voltage in mV            */
+	int Current;     /* current in mA            */
+	int Temperature; /* temperature in 0.1C     */
+	int HRSOC;       /* uncompensated SOC in 1/512%   */
+	int OCV;         /* OCV in mV*/
+	int ConvCounter; /* convertion counter       */
+	int RelaxTimer;  /* current relax timer value */
+	int CC_adj;      /* CC adj */
+	int VM_adj;      /* VM adj */
+	/* results & internals */
+	int SOC;         /* compensated SOC in 0.1% */
+	int AvgSOC;      /* in 0.1% */
+	int AvgVoltage;
+	int AvgCurrent;
+	int AvgTemperature;
+	int AccSOC;
+	int AccVoltage;
+	int AccCurrent;
+	int AccTemperature;
+	int BattState;
+	int GG_Mode;     /* 1=VM active, 0=CC active */
+	int LastMode;
+	int LastSOC;
+	int LastTemperature;
+	int BattOnline;	// BATD
+	int IDCode;
+	/* parameters */
+	int Alm_SOC;     /* SOC alm level in % */
+	int Alm_Vbat;    /* Vbat alm level in mV */
+	int CC_cnf;      /* nominal CC_cnf */
+	int VM_cnf;      /* nominal VM cnf */
+	int Cnom;        /* nominal capacity is mAh */
+	int Rsense;      /* sense resistor in milliOhms */
+	int CurrentFactor;
+	int RelaxThreshold;   /* current threshold for VM (mA)  */
+	int Adaptive;     /* adaptive mode */
+	int VM_TempTable[NTEMP];
+	int CapacityDerating[NTEMP];
+	char OCVOffset[OCVTAB_SIZE];
+	char OCVOffset2[OCVTAB_SIZE];
+	char Flag;
 } STC311x_BattDataTypeDef;
 
 static STC311x_BattDataTypeDef BattData;   /* STC311x data */
 
 /* structure of the STC311x battery monitoring parameters */
 typedef struct  {
-  int Voltage;        /* battery voltage in mV */
-  int Current;        /* battery current in mA */
-  int Temperature;    /* battery temperature in 0.1C */
-  int SOC;            /* battery relative SOC (%) in 0.1% */
-  int OCV;
-  int AvgSOC;
-  int AvgCurrent;
-  int AvgVoltage;
-  int AvgTemperature;
-  int ChargeValue;    /* remaining capacity in mAh */
-  int RemTime;        /* battery remaining operating time during discharge (min) */
-  int State;          /* charge (>0)/discharge(<0) state */
-  int CalStat;        /* Internal status */
-  /* -- parameters -- */
-  int Vmode;       /* 1=Voltage mode, 0=mixed mode */
-  int Alm_SOC;     /* SOC alm level */
-  int Alm_Vbat;    /* Vbat alm level */
-  int CC_cnf;      /* nominal CC_cnf */
-  int VM_cnf;      /* nominal VM cnf */
-  int Cnom;        /* nominal capacity in mAh */
-  int Rsense;      /* sense resistor */
-  int RelaxCurrent; /* current for relaxation (< C/20) */
-  int Adaptive;     /* adaptive mode */
-  int CapDerating[7];   /* capacity derating in 0.1%, for temp = 60, 40, 25, 10,   0, -10 C */
-  int OCVOffset[16];    /* OCV curve adjustment */
-  int OCVOffset2[16];    /* OCV curve adjustment */
-  int ExternalTemperature;
-  int ForceExternalTemperature;
+	int Voltage;        /* battery voltage in mV */
+	int Current;        /* battery current in mA */
+	int Temperature;    /* battery temperature in 0.1C */
+	int SOC;            /* battery relative SOC (%) in 0.1% */
+	int OCV;
+	int AvgSOC;
+	int AvgCurrent;
+	int AvgVoltage;
+	int AvgTemperature;
+	int ChargeValue;    /* remaining capacity in mAh */
+	int RemTime;        /* battery remaining operating time during discharge (min) */
+	int State;          /* charge (>0)/discharge(<0) state */
+	int CalStat;        /* Internal status */
+	/* -- parameters -- */
+	int Vmode;       /* 1=Voltage mode, 0=mixed mode */
+	int Alm_SOC;     /* SOC alm level */
+	int Alm_Vbat;    /* Vbat alm level */
+	int CC_cnf;      /* nominal CC_cnf */
+	int VM_cnf;      /* nominal VM cnf */
+	int Cnom;        /* nominal capacity in mAh */
+	int Rsense;      /* sense resistor */
+	int RelaxCurrent; /* current for relaxation (< C/20) */
+	int Adaptive;     /* adaptive mode */
+	int CapDerating[7];   /* capacity derating in 0.1%, for temp = 60, 40, 25, 10,   0, -10 C */
+	int OCVOffset[16];    /* OCV curve adjustment */
+	int OCVOffset2[16];    /* OCV curve adjustment */
+	int ExternalTemperature;
+	int ForceExternalTemperature;
 } GasGauge_DataTypeDef;
 
 
 /* structure of the STC311x RAM registers for the Gas Gauge algorithm data */
 static union {
-  unsigned char db[RAM_SIZE];  /* last byte holds the CRC */
-  struct {
-    short int TstWord;     /* 0-1 */
-    short int HRSOC;       /* 2-3 SOC backup */
-    short int CC_cnf;      /* 4-5 current CC_cnf */
-    short int VM_cnf;      /* 6-7 current VM_cnf */
-    char SOC;              /* 8 SOC for trace (in %) */
-    char GG_Status;        /* 9  */
-    /* bytes ..RAM_SIZE-2 are free, last byte RAM_SIZE-1 is the CRC */
-  } reg;
+	unsigned char db[RAM_SIZE];  /* last byte holds the CRC */
+	struct {
+		short int TstWord;     /* 0-1 */
+		short int HRSOC;       /* 2-3 SOC backup */
+		short int CC_cnf;      /* 4-5 current CC_cnf */
+		short int VM_cnf;      /* 6-7 current VM_cnf */
+		char SOC;              /* 8 SOC for trace (in %) */
+		char GG_Status;        /* 9  */
+		char Flag;
+		/* bytes ..RAM_SIZE-2 are free, last byte RAM_SIZE-1 is the CRC */
+	} reg;
 } GG_Ram;
 
 #endif /* __DUMMY_FUELGAUGE_H */

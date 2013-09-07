@@ -3165,7 +3165,7 @@ static int sr200pc20m_command(struct i2c_client *client, unsigned int cmd, void 
 static ssize_t rear_camera_fw_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%s", "SR352_SR352\n");
+	return sprintf(buf, "%s", "SR352 SR352\n");
 }
 
 static ssize_t rear_camera_type_show(struct device *dev,

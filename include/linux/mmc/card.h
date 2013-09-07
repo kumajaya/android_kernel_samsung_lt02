@@ -239,12 +239,13 @@ struct mmc_card {
 #define MMC_QUIRK_BLK_NO_CMD23	(1<<7)		/* Avoid CMD23 for regular multiblock */
 #define MMC_QUIRK_BROKEN_BYTE_MODE_512 (1<<8)	/* Avoid sending 512 bytes in */
 #define MMC_QUIRK_LONG_READ_TIME (1<<9)		/* Data read time > CSD says */
+#define MMC_QUIRK_MOVINAND_TLC (1<<31)			/* Check the moviNAND TLC */
 						/* byte mode */
 
 	unsigned int		pm_state;		/*check the pm state*/
 	unsigned int		erase_size;	/* erase size in sectors */
- 	unsigned int		erase_shift;	/* if erase unit is power 2 */
- 	unsigned int		pref_erase;	/* in sectors */
+	unsigned int		erase_shift;	/* if erase unit is power 2 */
+	unsigned int		pref_erase;	/* in sectors */
  	u8			erased_byte;	/* value of erased bytes */
 
 	u32			raw_cid[4];	/* raw card CID */

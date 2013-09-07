@@ -502,6 +502,13 @@ static int interpolate(int x, int n, int const *tabx, int const *taby )
 	return y;
 }
 
+static void STC311x_SetRamFlag(client)
+{
+	GG_Ram.reg.Flag = 1;
+	UpdateRamCrc();
+	STC311x_WriteRamData(client, GG_Ram.db);
+}
+
 static int STC311x_SaveVMCnf(struct i2c_client *client)
 {
 	int reg_mode;
@@ -1011,6 +1018,8 @@ static void STC31xx_Work(struct i2c_client *client)
 
 	res = STC31xx_Task(client, &GasGaugeData);
 
+	if ((fuelgauge->pdata->check_jig_status()) && (GG_Ram.reg.Flag != 1))
+		STC311x_SetRamFlag(client);
 	if (res > 0)
 	{
 		fuelgauge->info.batt_soc = GasGaugeData.SOC;
@@ -1140,8 +1149,9 @@ bool sec_hal_fg_init(struct i2c_client *client)
 
 	stc311x_get_version(client);
 
-
 	ret = MainTrim(client);
+
+	fuelgauge->pdata->check_vf_callback();
 
 	GasGaugeData.Vmode = get_battery_data(fuelgauge).Vmode;
 	GasGaugeData.Alm_SOC = get_battery_data(fuelgauge).Alm_SOC;

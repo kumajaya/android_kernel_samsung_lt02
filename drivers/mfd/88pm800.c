@@ -608,6 +608,21 @@ static int __devinit device_gpadc_init(struct pm80x_chip *chip,
 	 * to GPADC sampling = 1 slot for all GPADCs set for
 	 * Temprature mesurmants
 	 */
+#ifdef CONFIG_GPADC0_CURRENT_SINK_MODE
+        /*make gpadc0, gpadc1 bias out enable*/
+	mask = (PM800_GPADC_GP_BIAS_EN0 | PM800_GPADC_GP_BIAS_EN1 |
+		PM800_GPADC_GP_BIAS_EN2 | PM800_GPADC_GP_BIAS_EN3 |
+		PM800_GPADC_GP_BIAS_OUT0 | PM800_GPADC_GP_BIAS_OUT1);
+
+	if (pdata && (pdata->batt_det == 0))
+		data = (PM800_GPADC_GP_BIAS_EN0 | PM800_GPADC_GP_BIAS_EN1 |
+			PM800_GPADC_GP_BIAS_EN2 | PM800_GPADC_GP_BIAS_EN3|
+			PM800_GPADC_GP_BIAS_OUT0 | PM800_GPADC_GP_BIAS_OUT1);
+	else
+		data = (PM800_GPADC_GP_BIAS_EN0 | PM800_GPADC_GP_BIAS_EN2 |
+			PM800_GPADC_GP_BIAS_EN3 | PM800_GPADC_GP_BIAS_OUT0 |
+			PM800_GPADC_GP_BIAS_OUT1);
+#else
         /*make gpadc1 bias out enable*/
 	mask = (PM800_GPADC_GP_BIAS_EN0 | PM800_GPADC_GP_BIAS_EN1 |
 		PM800_GPADC_GP_BIAS_EN2 | PM800_GPADC_GP_BIAS_EN3 |PM800_GPADC_GP_BIAS_OUT1);
@@ -618,15 +633,23 @@ static int __devinit device_gpadc_init(struct pm80x_chip *chip,
 	else
 		data = (PM800_GPADC_GP_BIAS_EN0 | PM800_GPADC_GP_BIAS_EN2 |
 			PM800_GPADC_GP_BIAS_EN3 | PM800_GPADC_GP_BIAS_OUT1);
+#endif
 
 	ret = regmap_update_bits(map, PM800_GP_BIAS_ENA1, mask, data);
 	if (ret < 0)
 		{goto out;}
-        /*make gpadc1 output 31uA bias */
-        mask = PM800_GPADC_GP_BIAS_MASK0;
-        data = (0x06 << PM800_GPADC_GP_BIAS_SHIFT1_D0); // 31uA
-	  ret = regmap_update_bits(map, PM800_GPADC_BIAS1_D0, mask, data);
-	  dev_info(chip->dev, "pm800 device_gpadc_init: Done\n");
+	/*make gpadc0, gpadc1 output 31uA bias */
+	mask = PM800_GPADC_GP_BIAS_MASK0;
+	data = (0x06 << PM800_GPADC_GP_BIAS_SHIFT1_D0); // 31uA
+#ifdef CONFIG_GPADC0_CURRENT_SINK_MODE
+	ret = regmap_update_bits(map, PM800_GPADC_BIAS1, mask, data);
+	if (ret < 0)
+		{goto out;}
+#endif
+	ret = regmap_update_bits(map, PM800_GPADC_BIAS2, mask, data);
+	if (ret < 0)
+		{goto out;}
+	dev_info(chip->dev, "pm800 device_gpadc_init: Done\n");
 	return 0;
 
 out:

@@ -88,9 +88,6 @@ static enum power_supply_property sec_battery_props[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_AVG,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_CURRENT_AVG,
-	POWER_SUPPLY_PROP_CURRENT_UP_THRESHOLD,
-	POWER_SUPPLY_PROP_CURRENT_DOWN_THRESHOLD,
-	POWER_SUPPLY_PROP_CURRENT_POLLING_INTERVAL,
 	POWER_SUPPLY_PROP_CHARGE_NOW,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_TEMP,
@@ -1877,7 +1874,7 @@ continue_monitor:
 		sec_bat_status_str[battery->status],
 		sec_bat_charging_mode_str[battery->charging_mode],
 		sec_bat_health_str[battery->health],
-		battery->cable_type, battery->siop_level);
+		battery->cable_type, battery->pdata->siop_level);
 
 	power_supply_changed(&battery->psy_bat);
 
@@ -2079,6 +2076,8 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 	case BATT_TEMP_ADC_AVER:
 		break;
 	case BATT_VF_ADC:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			       battery->pdata->vf_adc);
 		break;
 	case BATT_SLATE_MODE:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
@@ -2090,10 +2089,12 @@ ssize_t sec_bat_show_attrs(struct device *dev,
 			       battery->pdata->is_lpm() ? 1 : 0);
 		break;
 	case SIOP_ACTIVATED:
+		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
+			       battery->pdata->siop_activated);
 		break;
 	case SIOP_LEVEL:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
-			       battery->siop_level);
+			       battery->pdata->siop_level);
 		break;
 	case BATT_CHARGING_SOURCE:
 		i += scnprintf(buf + i, PAGE_SIZE - i, "%d\n",
@@ -2351,20 +2352,30 @@ ssize_t sec_bat_store_attrs(
 	case BATT_LP_CHARGING:
 		break;
 	case SIOP_ACTIVATED:
+		if (sscanf(buf, "%d\n", &x) == 1) {
+			union power_supply_propval value;
+			dev_info(battery->dev,
+				"%s: siop activated: %d\n", __func__, x);
+				battery->pdata->siop_activated = x;
+				if (x == 0) {
+					value.intval = battery->pdata->charging_current[battery->cable_type].input_current_limit;
+					psy_do_property("sec-charger", set,
+							POWER_SUPPLY_PROP_CURRENT_NOW, value);
+				}
+				ret = count;
+		}
 		break;
 	case SIOP_LEVEL:
 		if (sscanf(buf, "%d\n", &x) == 1) {
 			union power_supply_propval value;
 			dev_info(battery->dev,
 				"%s: siop level: %d\n", __func__, x);
-			if (x >= 0 && x <= 100)
-				battery->siop_level = x;
-			else
-				battery->siop_level = 100;
-			value.intval = battery->siop_level;
-				psy_do_property("sec-charger", set,
+			battery->pdata->siop_level = x;
+			if (battery->cable_type == POWER_SUPPLY_TYPE_MAINS)
+				value.intval = 1500;
+			psy_do_property("sec-charger", set,
 					POWER_SUPPLY_PROP_CURRENT_NOW, value);
-				ret = count;
+			ret = count;
 		}
 		break;
 	case BATT_CHARGING_SOURCE:
@@ -2713,17 +2724,6 @@ static int sec_bat_set_property(struct power_supply *psy,
 		battery->capacity = val->intval;
 		power_supply_changed(&battery->psy_bat);
 		break;
-
-	case POWER_SUPPLY_PROP_CURRENT_UP_THRESHOLD:
-		battery->up_threshold = val->intval;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_DOWN_THRESHOLD:
-		battery->down_threshold = val->intval;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_POLLING_INTERVAL:
-		battery->polling_interval = val->intval;
-		break;
-
 	default:
 		return -EINVAL;
 	}
@@ -2741,8 +2741,8 @@ static int sec_bat_get_property(struct power_supply *psy,
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
-		if (battery->pdata->cable_check_type &
-			SEC_BATTERY_CABLE_CHECK_NOUSBCHARGE) {
+		if ((battery->pdata->cable_check_type &
+		     SEC_BATTERY_CABLE_CHECK_NOUSBCHARGE) && (!battery->pdata->is_lpm())) {
 			switch (battery->cable_type) {
 			case POWER_SUPPLY_TYPE_USB:
 			case POWER_SUPPLY_TYPE_USB_DCP:
@@ -2791,15 +2791,6 @@ static int sec_bat_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CURRENT_AVG:
 		val->intval = battery->current_avg;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_UP_THRESHOLD:
-		val->intval = battery->up_threshold;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_DOWN_THRESHOLD:
-		val->intval = battery->down_threshold;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_POLLING_INTERVAL:
-		val->intval = battery->polling_interval;
 		break;
 	/* charging mode (differ from power supply) */
 	case POWER_SUPPLY_PROP_CHARGE_NOW:
@@ -2962,10 +2953,6 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->charging_passed_time = 0;
 	battery->charging_next_time = 0;
 	battery->charging_fullcharged_time = 0;
-	battery->siop_level = 100;
-	battery->up_threshold = 1000;
-	battery->down_threshold = 1000;
-	battery->polling_interval = 30;
 
 #if defined(CONFIG_ANDROID_ALARM_ACTIVATED)
 	alarm_init(&battery->event_termination_alarm,

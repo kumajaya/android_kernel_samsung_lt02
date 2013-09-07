@@ -223,6 +223,43 @@ extern int pm80x_read_temperature(int *tbat)
 	 return ret;
 }
 EXPORT_SYMBOL(pm80x_read_temperature);
+
+extern int pm80x_rf_read_temperature(int *tbat)
+{
+	unsigned char buf[2];
+	int sum = 0, ret = -1;
+	*tbat=0;
+	struct pm80x_chip *chip = get_pm800_chip();
+	ret =regmap_bulk_read(chip->subchip->regmap_gpadc, PM800_GPADC0_MEAS1, buf,2);
+	if (ret >= 0)
+	{
+		sum = ((buf[0] & 0xFF) << 4) | (buf[1] & 0x0F);
+		sum = ((sum & 0xFFF) * 1400) >> 12;
+		*tbat = sum;
+	}
+	return ret;
+}
+EXPORT_SYMBOL(pm80x_rf_read_temperature);
+extern int pm80x_read_vf(int *vfbat)
+{
+	unsigned char buf[2];
+	int sum = 0, ret = -1;
+	u8 reg;
+
+	*vfbat=0;
+	struct pm80x_chip *chip = get_pm800_chip();
+
+	ret =regmap_bulk_read(chip->subchip->regmap_gpadc, PM800_GPADC3_MEAS1, buf,2);
+	if (ret >= 0)
+	{
+		sum = ((buf[0] & 0xFF) << 4) | (buf[1] & 0x0F);
+		sum = ((sum & 0xFFF) * 1400) >> 12;
+		*vfbat = sum;
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL(pm80x_read_vf);
 #endif
 
 

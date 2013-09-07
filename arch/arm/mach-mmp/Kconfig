@@ -314,4 +314,11 @@ config BT_MGMT
 	help
 	  This is for bluetooth mgmt
 
+config SEC_THERMISTOR
+	bool "Use external thermistor with ADC"
+	depends on CPU_PXA988
+	default n
+	help
+	  Use thermistor driver to check system temperature
+
 endif

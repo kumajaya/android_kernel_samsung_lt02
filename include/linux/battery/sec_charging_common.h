@@ -376,6 +376,7 @@ struct sec_battery_platform_data {
 	bool (*get_temperature_callback)(
 			enum power_supply_property,
 			union power_supply_propval*);
+	void  (*check_vf_callback)(void);
 
 	/* ADC API for each ADC type */
 	sec_bat_adc_api_t adc_api[SEC_BATTERY_ADC_TYPE_NUM];
@@ -504,6 +505,8 @@ struct sec_battery_platform_data {
 	unsigned int capacity_max_margin;
 	unsigned int capacity_min;
 
+	int vf_adc;
+
 	/* charger */
 	char *charger_name;
 	int chg_gpio_en;
@@ -521,11 +524,15 @@ struct sec_battery_platform_data {
 	int chg_float_voltage;
 	sec_charger_functions_t chg_functions_setting;
 
+	int siop_level;
+	bool siop_activated;
+
 	/* ADC setting */
 	unsigned int adc_check_count;
 	/* ADC type for each channel */
 	unsigned int adc_type[];
 };
+
 #define sec_battery_platform_data_t \
 	struct sec_battery_platform_data
 

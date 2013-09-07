@@ -57,6 +57,7 @@ struct sec_charger_info {
 
 	/* charging current : + charging, - OTG */
 	int charging_current;
+	int input_current;
 
 	/* register programming */
 	int reg_addr;

@@ -428,15 +428,10 @@ static void pm800_jack_det_work(struct work_struct *work)
 
 	com_value = gpio_get_value(mfp_to_gpio(GPIO012_GPIO_12));
 
-	/* Retry 10 times for check GND status */
+	/* Retry for check GND status */
 	if(value && com_value){
-		if(com_det_cnt < 10){
-			com_det_cnt++;
-			pr_info("[headset] check Com Status cnt=[%d]\n",com_det_cnt);//temp
-			mod_timer(&info->headset_timer, jiffies + msecs_to_jiffies(100));
-			return;
-		}
-		com_det_cnt=0;
+		pr_info("[headset] L-det checked, G-Det not checked.\n");
+		mod_timer(&info->headset_timer, jiffies + msecs_to_jiffies(100));
 		return;
 	}
 	else if(value && (!com_value)){

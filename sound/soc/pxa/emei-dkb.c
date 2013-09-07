@@ -185,9 +185,9 @@ static int emei_dkb_hifi_prepare(struct snd_pcm_substream *substream)
 	sscr1 = __raw_readl(ssp->mmio_base + SSCR1);
 
 	if (ssp_master)
-		sscr1 = (sscr1 & (~0x03000000)) | 0x00801DC0;
+		sscr1 = (sscr1 & (~0x03000000)) | 0x00b01DC0;
 	else
-		sscr1 |= 0x03801DC0;
+		sscr1 |= 0x03b01DC0;
 
 	__raw_writel(sscr0 | 0x41D0003F, ssp->mmio_base + SSCR0);
 	__raw_writel(sscr1, ssp->mmio_base + SSCR1);
@@ -290,9 +290,9 @@ static int emei_dkb_lofi_prepare(struct snd_pcm_substream *substream)
 	sscr1 = __raw_readl(ssp->mmio_base + SSCR1);
 
 	if (gssp_master)
-		sscr1 = (sscr1 & (~0x03000000)) | 0x60801C01;
+		sscr1 = (sscr1 & (~0x03000000)) | 0x60b01C01;
 	else
-		sscr1 = sscr1 | 0x63001C01;
+		sscr1 = sscr1 | 0x63301C01;
 
 	__raw_writel(sscr0 | 0xC0C0001F, ssp->mmio_base + SSCR0);
 	__raw_writel(sscr1, ssp->mmio_base + SSCR1);
@@ -371,6 +371,23 @@ static struct snd_soc_card emei_dkb_card = {
 	.num_links = ARRAY_SIZE(emei_dkb_hifi_dai),
 };
 
+#ifdef CONFIG_PM
+static int emei_dkb_suspend(struct device *dev)
+{
+	snd_soc_suspend(dev);
+	return 0;
+}
+
+static int emei_dkb_resume(struct device *dev)
+{
+	snd_soc_resume(dev);
+	return 0;
+}
+#endif
+
+static SIMPLE_DEV_PM_OPS(emei_dkb_pm_ops, emei_dkb_suspend,
+			 emei_dkb_resume);
+
 static int __devinit emei_dkb_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = &emei_dkb_card;
@@ -405,6 +422,7 @@ static struct platform_driver emei_dkb_driver = {
 	.driver		= {
 		.name	= "emei-dkb-hifi",
 		.owner	= THIS_MODULE,
+		.pm		= &emei_dkb_pm_ops,
 	},
 	.probe		= emei_dkb_probe,
 	.remove		= __devexit_p(emei_dkb_remove),

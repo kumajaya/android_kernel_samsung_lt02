@@ -441,7 +441,7 @@ void panic(const char *fmt, ...)
 #ifdef CONFIG_KERNEL_DEBUG_SEC
 	sec_debug_save_context();
 #endif
-	/* L1 & L2 cache management */
+	/* flush L1 from each core. L2 will be flushed later before reset. */
 	flush_cache_all();
 
 	bust_spinlocks(0);
@@ -474,6 +474,10 @@ void panic(const char *fmt, ...)
 		 * shutting down.  But if there is a chance of
 		 * rebooting the system it will be rebooted.
 		 */
+
+	 	/* L1 & L2 Cache Flush */
+		flush_cache_all();
+		outer_flush_all();
 		emergency_restart();
 	}
 #ifdef __sparc__

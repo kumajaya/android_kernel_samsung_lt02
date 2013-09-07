@@ -89,7 +89,7 @@ static sec_charging_current_t charging_current_table[] = {
 	{500,   500,    200,    40 * 60},     /* POWER_SUPPLY_TYPE_USB_DCP */
 	{500,   500,    200,    40 * 60},     /* POWER_SUPPLY_TYPE_USB_CDP */
 	{500,   500,    200,    40 * 60},     /* POWER_SUPPLY_TYPE_USB_ACA */
-	{500,   500,    200,    40 * 60},     /* POWER_SUPPLY_TYPE_MISC */
+	{1800,  2000,   200,    40 * 60},     /* POWER_SUPPLY_TYPE_MISC */
 	{0,     0,      0,      0},     /* POWER_SUPPLY_TYPE_CARDOCK */
 	{500,   500,    200,    40 * 60},     /* POWER_SUPPLY_TYPE_WPC */
 	{1800,  2000,   200,    40 * 60},     /* POWER_SUPPLY_TYPE_UARTOFF */
@@ -106,6 +106,9 @@ static int polling_time_table[] = {
 
 static struct power_supply *charger_supply;
 static bool is_jig_on;
+int current_cable_type = POWER_SUPPLY_TYPE_BATTERY;
+EXPORT_SYMBOL(current_cable_type);
+u8 attached_cable;
 
 static bool sec_bat_gpio_init(void)
 {
@@ -138,23 +141,20 @@ static bool sec_bat_is_lpm(void)
 	return lpcharge == 1 ? true : false;
 }
 
-void check_jig_status(int status)
-{
-	if (status) {
-		pr_info("%s: JIG On so reset fuel gauge capacity\n", __func__);
-		is_jig_on = true;
-	}
-
-}
-
 static bool sec_bat_check_jig_status(void)
 {
+	if ((attached_cable == CABLE_TYPE2_JIG_UART_OFF_VB_MUIC) ||
+	    (attached_cable == CABLE_TYPE2_JIG_UART_OFF_MUIC) ||
+	    (attached_cable == CABLE_TYPE2_JIG_USB_OFF_MUIC) ||
+	    (attached_cable == CABLE_TYPE2_JIG_USB_ON_MUIC)) {
+		pr_info("%s: JIG On so reset fuel gauge capacity\n", __func__);
+		is_jig_on = true;
+	} else {
+		is_jig_on = false;
+	}
+
 	return is_jig_on;
 }
-
-int current_cable_type = POWER_SUPPLY_TYPE_BATTERY;
-EXPORT_SYMBOL(current_cable_type);
-u8 attached_cable;
 
 void sec_charger_cb(u8 attached)
 {
@@ -452,8 +452,8 @@ static struct battery_data_t stc3115_battery_data[] = {
 		.Vmode= 0,       /*REG_MODE, BIT_VMODE 1=Voltage mode, 0=mixed mode */
 		.Alm_SOC = 1,      /* SOC alm level %*/
 		.Alm_Vbat = 3400,   /* Vbat alm level mV*/
-		.CC_cnf = 853,      /* nominal CC_cnf, coming from battery characterisation*/
-		.VM_cnf = 414,      /* nominal VM cnf , coming from battery characterisation*/
+		.CC_cnf = 870,      /* nominal CC_cnf, coming from battery characterisation*/
+		.VM_cnf = 422,      /* nominal VM cnf , coming from battery characterisation*/
 		.Cnom = 4000,       /* nominal capacity in mAh, coming from battery characterisation*/
 		.Rsense = 10,       /* sense resistor mOhms*/
 		.RelaxCurrent = 150, /* current for relaxation in mA (< C/20) */
@@ -505,8 +505,112 @@ static struct battery_data_t stc3115_battery_data[] = {
 			/*if the application temperature data is preferred than the STC3115 temperature*/
 		.ExternalTemperature = NULL, /*External temperature fonction, return C*/
 		.ForceExternalTemperature = 0, /* 1=External temperature, 0=STC3115 temperature */
+	},
+	{
+		.Vmode= 0,       /*REG_MODE, BIT_VMODE 1=Voltage mode, 0=mixed mode */
+		.Alm_SOC = 1,      /* SOC alm level %*/
+		.Alm_Vbat = 3400,   /* Vbat alm level mV*/
+		.CC_cnf = 872,      /* nominal CC_cnf, coming from battery characterisation*/
+		.VM_cnf = 412,      /* nominal VM cnf , coming from battery characterisation*/
+		.Cnom = 4000,       /* nominal capacity in mAh, coming from battery characterisation*/
+		.Rsense = 10,       /* sense resistor mOhms*/
+		.RelaxCurrent = 150, /* current for relaxation in mA (< C/20) */
+		.Adaptive = 1,     /* 1=Adaptive mode enabled, 0=Adaptive mode disabled */
+
+		/* Elentec Co Ltd Battery pack - 80 means 8% */
+		.CapDerating[6] = 80,   /* capacity derating in 0.1%, for temp = -20C */
+		.CapDerating[5] = 50,   /* capacity derating in 0.1%, for temp = -10C */
+		.CapDerating[4] = 20,    /* capacity derating in 0.1%, for temp = 0C */
+		.CapDerating[3] = 10,  /* capacity derating in 0.1%, for temp = 10C */
+		.CapDerating[2] = 0,  /* capacity derating in 0.1%, for temp = 25C */
+		.CapDerating[1] = 0,  /* capacity derating in 0.1%, for temp = 40C */
+		.CapDerating[0] = 0,  /* capacity derating in 0.1%, for temp = 60C */
+
+		.OCVOffset[15] = -110,    /* OCV curve adjustment */
+		.OCVOffset[14] = -10,   /* OCV curve adjustment */
+		.OCVOffset[13] = -6,    /* OCV curve adjustment */
+		.OCVOffset[12] = -6,    /* OCV curve adjustment */
+		.OCVOffset[11] = 0,    /* OCV curve adjustment */
+		.OCVOffset[10] = -6,    /* OCV curve adjustment */
+		.OCVOffset[9] = 2,     /* OCV curve adjustment */
+		.OCVOffset[8] = -9,      /* OCV curve adjustment */
+		.OCVOffset[7] = -1,      /* OCV curve adjustment */
+		.OCVOffset[6] = 11,    /* OCV curve adjustment */
+		.OCVOffset[5] = 9,    /* OCV curve adjustment */
+		.OCVOffset[4] = 16,     /* OCV curve adjustment */
+		.OCVOffset[3] = 37,    /* OCV curve adjustment */
+		.OCVOffset[2] = 26,     /* OCV curve adjustment */
+		.OCVOffset[1] = -44,    /* OCV curve adjustment */
+		.OCVOffset[0] = -66,     /* OCV curve adjustment */
+
+		.OCVOffset2[15] = -38,    /* OCV curve adjustment */
+		.OCVOffset2[14] = -38,   /* OCV curve adjustment */
+		.OCVOffset2[13] = -24,    /* OCV curve adjustment */
+		.OCVOffset2[12] = -26,    /* OCV curve adjustment */
+		.OCVOffset2[11] = -25,    /* OCV curve adjustment */
+		.OCVOffset2[10] = -31,    /* OCV curve adjustment */
+		.OCVOffset2[9] = -5,     /* OCV curve adjustment */
+		.OCVOffset2[8] = -3,      /* OCV curve adjustment */
+		.OCVOffset2[7] = -3,      /* OCV curve adjustment */
+		.OCVOffset2[6] = -17,  /* OCV curve adjustment */
+		.OCVOffset2[5] = -3,    /* OCV curve adjustment */
+		.OCVOffset2[4] = -5,     /* OCV curve adjustment */
+		.OCVOffset2[3] = 3,    /* OCV curve adjustment */
+		.OCVOffset2[2] = 48,     /* OCV curve adjustment */
+		.OCVOffset2[1] = 17,    /* OCV curve adjustment */
+		.OCVOffset2[0] = 0,     /* OCV curve adjustment */
+
+			/*if the application temperature data is preferred than the STC3115 temperature*/
+		.ExternalTemperature = NULL, /*External temperature fonction, return C*/
+		.ForceExternalTemperature = 0, /* 1=External temperature, 0=STC3115 temperature */
 	}
 };
+
+static struct battery_data_t *battery_data_sample;
+
+static void sec_bat_check_vf_callback(void)
+{
+        int vfbat;
+	int min = 1 << 11, max = -1;
+	int total = 0;
+	int vf_avg = 0;
+	int count;
+	int ret;
+
+	for (count = 0; count < 5; count++)
+	{
+		ret = pm80x_read_vf(&vfbat);
+		if (vfbat > max)
+			max = vfbat;
+	        if (vfbat < min)
+			min = vfbat;
+		total += vfbat;
+	}
+
+	vf_avg = (total - min - max) / 3;
+
+	if ((vf_avg > 0) && (vf_avg < 120)) {
+		battery_data_sample = &stc3115_battery_data[0];
+		sec_battery_pdata.vendor = "SDI SDI";
+		sec_battery_pdata.battery_data = (void *)battery_data_sample;
+
+		pr_info("%s : ADC = %d[%s]\n", __func__,
+			vf_avg, sec_battery_pdata.vendor);
+
+	} else if((vf_avg > 290) && (vf_avg < 390)) {
+		battery_data_sample = &stc3115_battery_data[1];
+		sec_battery_pdata.vendor = "ATL ATL";
+		sec_battery_pdata.battery_data = (void *)battery_data_sample;
+
+		pr_info("%s : ADC = %d[%s]\n", __func__,
+			vf_avg, sec_battery_pdata.vendor);
+
+	} else
+		pr_info("%s : ADC = %d[VF ADC ERROR]\n",
+			__func__, vf_avg);
+
+	sec_battery_pdata.vf_adc = vf_avg;
+}
 
 static bool sec_bat_adc_none_init(struct platform_device *pdev) { return true; }
 static bool sec_bat_adc_none_exit(void) { return true; }
@@ -552,6 +656,8 @@ sec_battery_platform_data_t sec_battery_pdata = {
 	.fuelalert_process = sec_fg_fuelalert_process,
 	.get_temperature_callback =
 		sec_bat_get_temperature_callback,
+	.check_vf_callback =
+	        sec_bat_check_vf_callback,
 
 	.adc_api[SEC_BATTERY_ADC_TYPE_NONE] = {
 		.init = sec_bat_adc_none_init,
@@ -679,6 +785,8 @@ sec_battery_platform_data_t sec_battery_pdata = {
 	.chg_irq_attr = IRQF_TRIGGER_RISING,
 
 	.chg_float_voltage = 4200,
+	.siop_activated = 0,
+	.siop_level = 0,
 };
 
 /* set STC3115 Fuel Gauge gpio i2c */

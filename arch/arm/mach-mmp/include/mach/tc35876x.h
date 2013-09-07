@@ -116,6 +116,7 @@ extern struct Vx5d3b_cabc_info *g_vx5d3b;
 extern unsigned int system_rev;
 extern int panel_id;
 extern unsigned int lpcharge;
+extern int recovery_mode;
 
 /**************************************************
 *		VX5B3DX MACRO FOR I2C			*

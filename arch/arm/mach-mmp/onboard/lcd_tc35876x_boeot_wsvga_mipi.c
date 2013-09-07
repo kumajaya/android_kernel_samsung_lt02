@@ -1444,6 +1444,8 @@ void __init lt02_add_lcd_mipi(void)
 	dsi = (struct dsi_info *)fb->phy_info;
 	dsi->master_mode = 1;
 	dsi->hfp_en = 0;
+
+	fb->recovery_mode = recovery_mode;
 #ifndef CONFIG_BACKLIGHT_TPS61165
 	/*For v5b3dx cabc*/
 	mdnie_class = class_create(THIS_MODULE, "mdnie");

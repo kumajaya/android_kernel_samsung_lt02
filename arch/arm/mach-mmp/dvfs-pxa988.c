@@ -162,8 +162,8 @@ static int vm_millivolts_988ax_svc[PROFILE_NUM][VL_MAX] = {
 	{1050, 1100, 1125, 1188},       /* profile 1 */
 	{1050, 1100, 1125, 1200},       /* profile 2 */
 	{1050, 1100, 1138, 1213},       /* profile 3 */
-	{1050, 1100, 1150, 1225},       /* profile 4 */
-	{1050, 1100, 1175, 1250},       /* profile 5 */
+	{1050, 1100, 1150, 1238},       /* profile 4 */
+	{1050, 1100, 1175, 1263},       /* profile 5 */
 	{1050, 1100, 1200, 1288},       /* profile 6 */
 	{1050, 1138, 1225, 1313},       /* profile 7 */
 	{1050, 1138, 1275, 1350},       /* profile 8 */
@@ -177,8 +177,8 @@ static int vm_millivolts_986ax_svc[PROFILE_NUM][VL_MAX] = {
 	{1050, 1100, 1100, 1188},	/* profile 1 */
 	{1050, 1100, 1113, 1200},	/* profile 2 */
 	{1050, 1100, 1138, 1213},	/* profile 3 */
-	{1050, 1100, 1150, 1225},	/* profile 4 */
-	{1050, 1100, 1175, 1250},	/* profile 5 */
+	{1050, 1100, 1150, 1238},	/* profile 4 */
+	{1050, 1100, 1175, 1263},	/* profile 5 */
 	{1050, 1100, 1200, 1288},	/* profile 6 */
 	{1050, 1138, 1225, 1313},	/* profile 7 */
 	{1050, 1138, 1275, 1350},	/* profile 8 */
@@ -429,6 +429,13 @@ int dvc_set_voltage(int buck_id, int level)
 		/* Set high bits voltage */
 		if (current_volt_table[reg_index].volt_level_H == level)
 			return 0;
+		/*
+		 * AP SW is the only client to trigger AP DVC.
+		 * Clear AP interrupt status to make sure no wrong signal is set
+		 * write 0 to clear, write 1 has no effect
+		 */
+		__raw_writel(0x6, PMUM_DVC_ISR);
+
 		reg_val = __raw_readl(dvc_reg_table[reg_index].reg);
 		reg_val &= ~dvc_reg_table[reg_index].mask_H;
 		reg_val |= (level << dvc_reg_table[reg_index].offset_H);
@@ -447,7 +454,7 @@ int dvc_set_voltage(int buck_id, int level)
 				BUG_ON(1);
 			}
 			/*
-			 * Clear interrupt status
+			 * Clear AP interrupt status
 			 * write 0 to clear, write 1 has no effect
 			 */
 			__raw_writel(0x6, PMUM_DVC_ISR);
@@ -460,8 +467,6 @@ int dvc_set_voltage(int buck_id, int level)
 		reg_val = __raw_readl(dvc_reg_table[reg_index].reg);
 		reg_val &= ~dvc_reg_table[reg_index].mask_L;
 		reg_val |= (level << dvc_reg_table[reg_index].offset_L);
-		if (dvc_reg_table[reg_index].offset_trig)
-			reg_val |= (1 << dvc_reg_table[reg_index].offset_trig);
 		__raw_writel(reg_val, dvc_reg_table[reg_index].reg);
 		current_volt_table[reg_index].volt_level_L = level;
 	}

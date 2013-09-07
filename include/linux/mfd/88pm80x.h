@@ -379,7 +379,6 @@ unsigned char pm80x_get_power_on_reason(void);
 #define PM800_VBAT_AVG2			0xA1
 #define PM800_VBAT_SLP			0xB0
 
-#define PM800_GPADC_BIAS1_D0				(0x0C)
 #define PM800_GPADC_GP_BIAS_SHIFT1_D0	0
 /* 88PM805 Registers */
 #define PM805_MAIN_POWERUP		(0x01)
@@ -556,6 +555,8 @@ struct pm80x_platform_data {
 };
 #if defined(CONFIG_SPA) || defined(CONFIG_MACH_LT02)
 extern int pm80x_read_temperature(int *tbat);
+extern int pm80x_rf_read_temperature(int *tbat);
+extern int pm80x_read_vf(int *vfbat);
 #endif
 
 extern const struct dev_pm_ops pm80x_pm_ops;

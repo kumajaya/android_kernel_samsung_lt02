@@ -314,6 +314,9 @@ struct pxa168fb_mach_info {
 	struct fb_videomode *modes;
 	unsigned int max_fb_size;
 	unsigned int xres_virtual;
+	/* recovery mode of system */
+	int recovery_mode;
+
 
 	/*
 	 * Pix_fmt

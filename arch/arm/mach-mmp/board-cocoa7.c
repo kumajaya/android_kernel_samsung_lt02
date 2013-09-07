@@ -566,6 +566,333 @@ static int pm800_plat_config(struct pm80x_chip *chip,
 	return 0;
 }
 
+static int pm805_workaround(struct pm80x_chip *chip)
+{
+	static unsigned char buf[65];
+	/* 1 */
+	regmap_write(chip->regmap, 0xfa, 0x0);
+	regmap_write(chip->regmap, 0xfb, 0x0);
+	/* 2 */
+	pm800_extern_write(PM80X_BASE_PAGE, 0xd0, 0x80);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x0d, 0x80);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x1d, 0x01);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x21, 0x20);
+	pm800_extern_write(PM80X_BASE_PAGE, 0xe2, 0x2a);
+
+	/* 3 */
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	msleep(10);
+	regmap_write(chip->regmap, 0x01, 0x03);
+	regmap_write(chip->regmap, 0x80, 0xad);
+	msleep(20);
+
+	/* 4 */
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	msleep(200);
+	regmap_write(chip->regmap, 0x29, 0x08);
+	regmap_write(chip->regmap, 0x26, 0x0);
+	msleep(20);
+	regmap_write(chip->regmap, 0x01, 0x02);
+	regmap_write(chip->regmap, 0x80, 0x00);
+	regmap_write(chip->regmap, 0x01, 0x03);
+	msleep(20);
+
+	/* 5 */
+	regmap_write(chip->regmap, 0x07, 0x00);
+	regmap_write(chip->regmap, 0x08, 0x00);
+	regmap_write(chip->regmap, 0x0a, 0x04);
+	regmap_write(chip->regmap, 0x80, 0x00);
+	regmap_write(chip->regmap, 0x82, 0x10);
+	regmap_write(chip->regmap, 0x95, 0x44);
+	regmap_write(chip->regmap, 0x96, 0x71);
+	regmap_write(chip->regmap, 0x97, 0x12);
+	regmap_write(chip->regmap, 0x99, 0xf0);
+	regmap_write(chip->regmap, 0xbd, 0x00);
+	regmap_write(chip->regmap, 0xbf, 0x00);
+	regmap_write(chip->regmap, 0xcc, 0x00);
+	regmap_write(chip->regmap, 0xcd, 0x00);
+	regmap_write(chip->regmap, 0xce, 0x04);
+	regmap_write(chip->regmap, 0xcf, 0x00);
+	regmap_write(chip->regmap, 0xd0, 0x00);
+	regmap_write(chip->regmap, 0xd1, 0x00);
+	regmap_write(chip->regmap, 0xdc, 0x00);
+	regmap_write(chip->regmap, 0xdd, 0x00);
+	regmap_write(chip->regmap, 0xde, 0x00);
+	regmap_write(chip->regmap, 0xe2, 0x00);
+	regmap_write(chip->regmap, 0xe3, 0x58);
+
+	/* 6 */
+	regmap_write(chip->regmap, 0x02, 0x00);
+	regmap_write(chip->regmap, 0x03, 0x00);
+	regmap_write(chip->regmap, 0x04, 0x00);
+	regmap_write(chip->regmap, 0x05, 0x00);
+	regmap_write(chip->regmap, 0x06, 0x00);
+	regmap_write(chip->regmap, 0x10, 0x14);
+	regmap_write(chip->regmap, 0x11, 0x00);
+	regmap_write(chip->regmap, 0x12, 0x00);
+	regmap_write(chip->regmap, 0x13, 0x00);
+	regmap_write(chip->regmap, 0x14, 0x00);
+	regmap_write(chip->regmap, 0x15, 0x00);
+	regmap_write(chip->regmap, 0x16, 0x00);
+	regmap_write(chip->regmap, 0x20, 0x12);
+	regmap_write(chip->regmap, 0x21, 0x38);
+	regmap_write(chip->regmap, 0x22, 0x00);
+	regmap_write(chip->regmap, 0x23, 0x1b);
+	regmap_write(chip->regmap, 0x24, 0x00);
+	regmap_write(chip->regmap, 0x25, 0x00);
+	regmap_write(chip->regmap, 0x26, 0x00);
+	regmap_write(chip->regmap, 0x27, 0x00);
+	regmap_write(chip->regmap, 0x29, 0x08);
+	regmap_write(chip->regmap, 0x2a, 0x00);
+	regmap_write(chip->regmap, 0x30, 0x1f);
+	regmap_write(chip->regmap, 0x31, 0x4c);
+	regmap_write(chip->regmap, 0x32, 0x04);
+	regmap_write(chip->regmap, 0x33, 0x00);
+	regmap_write(chip->regmap, 0x34, 0x00);
+	regmap_write(chip->regmap, 0x35, 0x14);
+	regmap_write(chip->regmap, 0x36, 0x23);
+	regmap_write(chip->regmap, 0x37, 0x04);
+	regmap_write(chip->regmap, 0x38, 0x00);
+	regmap_write(chip->regmap, 0x39, 0x14);
+	regmap_write(chip->regmap, 0x3b, 0x00);
+	regmap_write(chip->regmap, 0x3c, 0x23);
+	regmap_write(chip->regmap, 0x3d, 0x01);
+	regmap_write(chip->regmap, 0x3e, 0x00);
+	regmap_write(chip->regmap, 0x3f, 0x00);
+	regmap_write(chip->regmap, 0x40, 0x00);
+	regmap_write(chip->regmap, 0x41, 0x00);
+	regmap_write(chip->regmap, 0x42, 0x00);
+	regmap_write(chip->regmap, 0x50, 0x00);
+	regmap_write(chip->regmap, 0x51, 0x00);
+	regmap_write(chip->regmap, 0x52, 0x01);
+	regmap_write(chip->regmap, 0x53, 0x01);
+	regmap_write(chip->regmap, 0x54, 0x55);
+	regmap_write(chip->regmap, 0x55, 0x20);
+	regmap_write(chip->regmap, 0x56, 0x00);
+	regmap_write(chip->regmap, 0x57, 0x00);
+	regmap_write(chip->regmap, 0x58, 0x00);
+	regmap_write(chip->regmap, 0x59, 0x00);
+	regmap_write(chip->regmap, 0x5a, 0x00);
+	regmap_write(chip->regmap, 0x5b, 0x01);
+
+	buf[0] = 0x5c;
+	buf[1] = 0x0;
+	buf[2] = 0x0;
+	buf[3] = 0x0;
+	buf[4] = 0x0;
+	buf[5] = 0x0;
+	buf[6] = 0x0;
+	buf[7] = 0x0;
+	buf[8] = 0x0;
+	buf[9] = 0x0;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x04;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x08;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x0c;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x10;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x14;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x18;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x1c;
+	i2c_master_send(chip->client, &buf[0], 10);
+	regmap_write(chip->regmap, 0x5b, 0x02);
+
+	buf[0] = 0x5c;
+	buf[1] = 0x0;
+	buf[2] = 0x10;
+	buf[3] = 0x00;
+	buf[4] = 0x00;
+	buf[5] = 0x00;
+	buf[6] = 0x00;
+	buf[7] = 0x00;
+	buf[8] = 0x00;
+	buf[9] = 0x00;
+	buf[10] = 0x00;
+	buf[11] = 0x00;
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x03);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x04);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x05);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x06);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x07);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x08);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x09);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0a);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0b);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0c);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0d);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0e);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0f);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x10);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x11);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x12);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x13);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x14);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x15);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5d, 0x00);
+	regmap_write(chip->regmap, 0x5b, 0x00);
+	regmap_write(chip->regmap, 0x84, 0x88);
+	regmap_write(chip->regmap, 0x85, 0x16);
+	regmap_write(chip->regmap, 0x86, 0x16);
+	regmap_write(chip->regmap, 0x87, 0x00);
+	regmap_write(chip->regmap, 0x88, 0x40);
+	regmap_write(chip->regmap, 0x8a, 0x08);
+	regmap_write(chip->regmap, 0x8b, 0x05);
+	regmap_write(chip->regmap, 0x8c, 0x00);
+	regmap_write(chip->regmap, 0x8d, 0x00);
+	regmap_write(chip->regmap, 0x8e, 0x09);
+	regmap_write(chip->regmap, 0x8f, 0x00);
+	regmap_write(chip->regmap, 0x90, 0x7e);
+	regmap_write(chip->regmap, 0x91, 0x03);
+	regmap_write(chip->regmap, 0x92, 0x55);
+	regmap_write(chip->regmap, 0x93, 0x04);
+	regmap_write(chip->regmap, 0x94, 0x02);
+	regmap_write(chip->regmap, 0x99, 0xf0);
+	regmap_write(chip->regmap, 0x9a, 0x12);
+
+	regmap_write(chip->regmap, 0xa0, 0x00);
+	regmap_write(chip->regmap, 0xa1, 0x00);
+	regmap_write(chip->regmap, 0xa2, 0x00);
+	regmap_write(chip->regmap, 0xa3, 0x00);
+	regmap_write(chip->regmap, 0xa4, 0x00);
+	regmap_write(chip->regmap, 0xa5, 0x00);
+	regmap_write(chip->regmap, 0xa6, 0x00);
+	regmap_write(chip->regmap, 0xa7, 0x00);
+	regmap_write(chip->regmap, 0xa8, 0x00);
+	regmap_write(chip->regmap, 0xaa, 0x00);
+	regmap_write(chip->regmap, 0xac, 0x00);
+	regmap_write(chip->regmap, 0xae, 0x00);
+
+	regmap_write(chip->regmap, 0xb0, 0x00);
+	regmap_write(chip->regmap, 0xb2, 0x00);
+	regmap_write(chip->regmap, 0xb4, 0x00);
+	regmap_write(chip->regmap, 0xb6, 0x00);
+	regmap_write(chip->regmap, 0xb8, 0x00);
+	regmap_write(chip->regmap, 0xba, 0x00);
+	regmap_write(chip->regmap, 0xbc, 0x00);
+
+	regmap_write(chip->regmap, 0xc1, 0x00);
+	regmap_write(chip->regmap, 0xc2, 0x00);
+	regmap_write(chip->regmap, 0xc3, 0x00);
+	regmap_write(chip->regmap, 0xc4, 0x00);
+	regmap_write(chip->regmap, 0xc9, 0x00);
+	regmap_write(chip->regmap, 0xca, 0x00);
+
+	regmap_write(chip->regmap, 0xd2, 0x00);
+	regmap_write(chip->regmap, 0xd3, 0x00);
+	regmap_write(chip->regmap, 0xd4, 0x00);
+	regmap_write(chip->regmap, 0xd5, 0x00);
+	regmap_write(chip->regmap, 0xd6, 0x00);
+	regmap_write(chip->regmap, 0xd7, 0x00);
+	regmap_write(chip->regmap, 0xd8, 0x00);
+	regmap_write(chip->regmap, 0xd9, 0x00);
+	regmap_write(chip->regmap, 0xda, 0x00);
+	regmap_write(chip->regmap, 0xdb, 0x00);
+	regmap_write(chip->regmap, 0x01, 0x02);
+
+	msleep(10);
+	regmap_write(chip->regmap, 0xfc, 0x00);
+
+	pm800_extern_write(PM80X_BASE_PAGE, 0xe2, 0x2a);
+	msleep(1);
+
+	return 0;
+}
+
+
+static int pm805_plat_config(struct pm80x_chip *chip,
+				struct pm80x_platform_data *pdata)
+{
+	if (!chip || !pdata || !chip->regmap) {
+		pr_err("%s:chip or pdata is not availiable!\n", __func__);
+		return -EINVAL;
+	}
+
+	/* workaround */
+	pm805_workaround(chip);
+
+	return 0;
+}
+
 #ifdef CONFIG_SAMSUNG_JACK
 static struct sec_jack_zone sec_jack_zones[] = {
 	{
@@ -714,6 +1041,7 @@ static struct pm80x_platform_data pm800_info = {
 
 static struct pm80x_platform_data pm805_info = {
 	.irq_mode = 0,
+	.plat_config = pm805_plat_config,	
 };
 
 static void pm800_dvctable_init(void)

@@ -746,9 +746,9 @@ static void kcryptd_async_done(struct crypto_async_request *async_req,
 			       int error);
 
 static void crypt_alloc_req(struct crypt_config *cc,
-			    struct convert_context *ctx)
+			    struct convert_context *ctx,
+			    struct crypt_cpu *this_cc)
 {
-	struct crypt_cpu *this_cc = this_crypt_config(cc);
 	unsigned key_index = ctx->sector & (cc->tfms_count - 1);
 
 	if (!this_cc->req)
@@ -774,7 +774,7 @@ static int crypt_convert(struct crypt_config *cc,
 	while(ctx->idx_in < ctx->bio_in->bi_vcnt &&
 	      ctx->idx_out < ctx->bio_out->bi_vcnt) {
 
-		crypt_alloc_req(cc, ctx);
+		crypt_alloc_req(cc, ctx, this_cc);
 
 		atomic_inc(&ctx->pending);
 

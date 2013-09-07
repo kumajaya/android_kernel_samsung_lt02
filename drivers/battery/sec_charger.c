@@ -20,6 +20,12 @@ static enum power_supply_property sec_charger_props[] = {
 	POWER_SUPPLY_PROP_CURRENT_NOW,
 };
 
+static int input_current[] = {
+	1500,
+	1500,
+	1500,
+};
+
 static int sec_chg_get_property(struct power_supply *psy,
 			    enum power_supply_property psp,
 			    union power_supply_propval *val)
@@ -68,12 +74,21 @@ static int sec_chg_set_property(struct power_supply *psy,
 			charger->pdata->charging_current[
 			val->intval].fast_charging_current;
 
+		if (!charger->pdata->siop_activated) {
+			charger->input_current =
+				charger->pdata->charging_current[
+					val->intval].input_current_limit;
+		} else {
+			charger->input_current = input_current[
+				charger->pdata->siop_level];
+		}
+
 		if (!sec_hal_chg_set_property(charger->client, psp, val))
 			return -EINVAL;
 		break;
 	/* val->intval : charging current */
 	case POWER_SUPPLY_PROP_CURRENT_NOW:
-		charger->charging_current = val->intval;
+		charger->input_current = val->intval;
 
 		if (!sec_hal_chg_set_property(charger->client, psp, val))
 			return -EINVAL;

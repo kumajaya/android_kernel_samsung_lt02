@@ -73,7 +73,7 @@ static void irda_vdd_onoff(bool onoff)
 			pr_err("irled: failed to enable irled_vdd regulator\n");
 			return;
 		}
-		msleep(100);
+		mdelay(1);
 	} else {
 		gpio_direction_output(irled_gpios[GPIO_IRDA_EN].gpio, onoff);
 		if (regulator_is_enabled(irled_vdd))
@@ -83,7 +83,6 @@ static void irda_vdd_onoff(bool onoff)
 			pr_err("irled: failed to disable irled_vdd regulator\n");
 			return;
 		}
-		msleep(20);
 	}
 }
 

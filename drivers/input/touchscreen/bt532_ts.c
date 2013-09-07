@@ -514,6 +514,7 @@ struct bt532_ts_info {
 	struct tsp_factory_info			*factory_info;
 	struct tsp_raw_data				*raw_data;
 #endif
+	s8								finger_check[MAX_SUPPORTED_FINGER_NUM];
 };
 
 /*<= you must set key button mapping*/
@@ -868,6 +869,8 @@ static void esd_timeout_handler(unsigned long data)
 {
 	struct bt532_ts_info *info = (struct bt532_ts_info *)data;
 
+	dev_info(&info->client->dev, "%s\n", __func__);
+
 	info->p_esd_timeout_tmr = NULL;
 	queue_work(info->esd_tmr_workqueue, &info->tmr_work);
 }
@@ -918,6 +921,7 @@ static void ts_tmr_work(struct work_struct *work)
 	if (info->work_state != NOTHING) {
 		dev_err(&client->dev, "%s: Other process occupied (%d)\n",
 			__func__, info->work_state);
+		esd_timer_start(CHECK_ESD_TIMER, info);
 		up(&info->work_lock);
 
 		return;
@@ -935,9 +939,8 @@ static void ts_tmr_work(struct work_struct *work)
 	info->work_state = NOTHING;
 	enable_irq(info->irq);
 	up(&info->work_lock);
-#if defined(TSP_VERBOSE_DEBUG)
+
 	dev_info(&client->dev, "tmr queue work\n");
-#endif
 
 	return;
 
@@ -998,13 +1001,16 @@ static bool bt532_power_control(struct bt532_ts_info *info, u8 ctl)
 	struct bt532_ts_platform_data *pdata = info->pdata;
 
 	if (ctl == POWER_OFF) {
+		dev_info(&info->client->dev, "%s : power off\n", __func__);
 		gpio_direction_output(pdata->gpio_ldo_en, 0);
 		msleep(CHIP_OFF_DELAY);
 	} else {
+		dev_info(&info->client->dev, "%s : power on\n", __func__);
 		gpio_direction_output(pdata->gpio_ldo_en, 1);
 
 		/* zxt power on sequence */
 		if (ctl == POWER_ON_SEQUENCE) {
+			dev_info(&info->client->dev, "%s : power on sequence\n", __func__);
 			msleep(CHIP_ON_DELAY);
 
 			return bt532_power_sequence(info);
@@ -1689,6 +1695,8 @@ static void clear_report_data(struct bt532_ts_info *info)
 	info->double_booster = false;
 	pm_qos_update_request(&info->cpufreq_qos_req_min, PM_QOS_DEFAULT_VALUE);
 #endif
+
+	memset(info->finger_check, 0x00, ARRAY_SIZE(info->finger_check));
 }
 
 #define	PALM_REPORT_WIDTH	200
@@ -1884,6 +1892,17 @@ static irqreturn_t bt532_touch_irq_handler(int irq, void *data)
 #else
 				dev_info(&client->dev, "Finger [%02d] down\n", i);
 #endif
+				info->finger_check[i]++;
+
+				if (info->finger_check[i] >= 3) {
+					dev_info(&client->dev, "0%d id count %d\n", i, info->finger_check[i]);
+					clear_report_data(info);
+					bt532_power_control(info, POWER_OFF);
+					bt532_power_control(info, POWER_ON_SEQUENCE);
+					mini_init_touch(info);
+
+					goto out;
+				}
 #if defined(TOUCH_BOOSTER)
 				info->finger_cnt++;
 
@@ -1902,6 +1921,19 @@ static irqreturn_t bt532_touch_irq_handler(int irq, void *data)
 		} else if (zinitix_bit_test(sub_status, SUB_BIT_UP)||
 			zinitix_bit_test(prev_sub_status, SUB_BIT_EXIST)) {
 			memset(&info->touch_info.coord[i], 0x0, sizeof(struct coord));
+
+			info->finger_check[i]--;
+
+			if (info->finger_check[i] <= -3) {
+				dev_info(&client->dev, "0%d id count %d\n", i, info->finger_check[i]);
+				clear_report_data(info);
+				bt532_power_control(info, POWER_OFF);
+				bt532_power_control(info, POWER_ON_SEQUENCE);
+				mini_init_touch(info);
+
+				goto out;
+			}
+
 			input_mt_slot(info->input_dev, i);
 			input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 0);
 			dev_info(&client->dev, "Finger [%02d] up\n", i);
@@ -2309,9 +2341,6 @@ static void fw_update(void *device_data)
 
 			goto err_fw_size;
 		}
-
-		filp_close(fp, current->files);
-		set_fs(old_fs);
 
 		ret = ts_upgrade_sequence((u8*)buff);
 		if(ret<0) {

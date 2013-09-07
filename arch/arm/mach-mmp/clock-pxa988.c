@@ -2848,7 +2848,6 @@ static void ssp1_clk_disable(struct clk *clk)
 static int ssp1_clk_setrate(struct clk *clk, unsigned long rate)
 {
 	unsigned int val;
-	static int enable_count;
 	/*
 	 * currently rate is used to as an indication of clock enable or
 	 * not. since fixed 44.1K is used. in future if multi-rate is
@@ -2857,19 +2856,15 @@ static int ssp1_clk_setrate(struct clk *clk, unsigned long rate)
 	 */
 
 	if (rate) {
-		if (enable_count++ == 0) {
-			val = __raw_readl(MPMU_ISCCRX1);
-			/* set bit 31 & 29 to enable sysclk & bitclk */
-			val |= (0x5 << 29);
-			__raw_writel(val, MPMU_ISCCRX1);
-		}
+		val = __raw_readl(MPMU_ISCCRX1);
+		/* set bit 31 & 29 to enable sysclk & bitclk */
+		val |= (0x5 << 29);
+		__raw_writel(val, MPMU_ISCCRX1);
 	} else {
-		if (--enable_count == 0) {
-			val = __raw_readl(MPMU_ISCCRX1);
-			/* clear bit 31 & 29 to disable sysclk & bitclk */
-			val &= ~(0x5 << 29);
-			__raw_writel(val, MPMU_ISCCRX1);
-		}
+		val = __raw_readl(MPMU_ISCCRX1);
+		/* clear bit 31 & 29 to disable sysclk & bitclk */
+		val &= ~(0x5 << 29);
+		__raw_writel(val, MPMU_ISCCRX1);
 	}
 
 	pr_debug("%s: ISCCRx1 %x\n", __func__, __raw_readl(MPMU_ISCCRX1));

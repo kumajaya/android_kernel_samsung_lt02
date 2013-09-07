@@ -912,6 +912,7 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 				struct fb_info *info)
 {
 	struct pxa168fb_info *fbi = info->par;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 
 	dev_dbg(info->dev, "Enter %s\n", __func__);
 
@@ -925,7 +926,8 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 	 * 3 buf support, if two buffers deliverd in one vsync,
 	 * second frame need to wait for vsync
 	 */
-	if (atomic_dec_and_test(&fbi->vsync_cnt) && NEED_VSYNC(fbi)) {
+	if ((atomic_dec_and_test(&fbi->vsync_cnt)
+		|| mi->recovery_mode) && NEED_VSYNC(fbi)) {
 		pr_debug("2 frames delivered in one vsync\n");
 		wait_for_vsync(fbi, SYNC_SELF);
 	}

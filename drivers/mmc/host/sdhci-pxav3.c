@@ -383,18 +383,10 @@ static int __devinit sdhci_pxav3_probe(struct platform_device *pdev)
 	pltfm_host->clk = clk;
 	clk_prepare_enable(clk);
 
-	if (pdata->cd_type == PXA_SDHCI_CD_PERMANENT) {
-		host->quirks = SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK
-			| SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC
-			| SDHCI_QUIRK_32BIT_ADMA_SIZE
-			| SDHCI_QUIRK_BROKEN_ADMA
-			| SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
-	} else {
-		host->quirks = SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK
-			| SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC
-			| SDHCI_QUIRK_32BIT_ADMA_SIZE
-			| SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
-	}
+	host->quirks = SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK
+		| SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC
+		| SDHCI_QUIRK_32BIT_ADMA_SIZE
+		| SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
 
 	match = of_match_device(of_match_ptr(sdhci_pxav3_of_match), &pdev->dev);
 	if (match)

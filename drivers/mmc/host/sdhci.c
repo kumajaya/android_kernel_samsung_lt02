@@ -44,6 +44,7 @@
 	pr_debug(DRIVER_NAME " [%s()]: " f, __func__,## x)
 
 #define MAX_TUNING_LOOP 40
+#define SDH_IRQ_STORM_CHECK_THR 80
 
 static unsigned int debug_quirks = 0;
 static unsigned int debug_quirks2;
@@ -2661,6 +2662,7 @@ static irqreturn_t sdhci_irq(int irq, void *dev_id)
 	struct sdhci_host *host = dev_id;
 	u32 intmask, unexpected = 0;
 	int cardint = 0, max_loops = 16;
+	static int irq_no_owner;
 
 	spin_lock(&host->lock);
 
@@ -2680,9 +2682,31 @@ static irqreturn_t sdhci_irq(int irq, void *dev_id)
 	intmask = sdhci_readl(host, SDHCI_INT_STATUS);
 
 	if (!intmask || intmask == 0xffffffff) {
+		irq_no_owner++;
+		/* if the IRQ handler has been called many times but not real
+		 * IRQ source is found, there may be two reasons:
+		 * #1. SD Hosts share the same IRQ Line: the IRQ line has
+		 * been enabled/used by other host, but one host's IRQ happens
+		 * before its IRQ handler is registered
+		 * #2. SD Host Wake up event connect to IRQ line, but it can't
+		 * be detected by SD Host IRQ register, like pxa988,pxa1088,
+		 * only found when just system resume, very occasionally
+		 */
+		if (irq_no_owner >= SDH_IRQ_STORM_CHECK_THR) {
+			irq_no_owner = 0;
+			/* check the above #1 */
+			pr_err_once("SDH may cause IRQ storm, pending slot is 0x%x!\n",
+					sdhci_readw(host, SDHCI_SLOT_INT_STATUS));
+
+			/* Fix the above #2 suspect */
+			if (host->ops && host->ops->clr_wakeup_event)
+				host->ops->clr_wakeup_event(host);
+		}
+
 		result = IRQ_NONE;
 		goto out;
-	}
+	} else
+		irq_no_owner = 0;
 
 again:
 	DBG("*** %s got interrupt: 0x%08x\n",

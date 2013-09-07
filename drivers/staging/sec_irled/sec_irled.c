@@ -50,6 +50,9 @@
 
 #define I2C_RETRY_COUNT	5
 
+#define MC96_POR_DELAY_MS	100
+#define MC96_OFF_DELAY_MS	20
+
 struct sec_irled_data {
 	struct i2c_client *client;
 	struct sec_irled_platform_data *pdata;
@@ -121,7 +124,7 @@ static bool mc96_check_boot_checksum(struct sec_irled_data *data)
 static int mc96_fw_update(struct sec_irled_data *data)
 {
 	struct i2c_client *client = data->client;
-	int i, ret;
+	int i, j, ret;
 
 	while (1) {
 		spin_lock(&data->lock);
@@ -133,56 +136,63 @@ static int mc96_fw_update(struct sec_irled_data *data)
 	data->busy_flag = true;
 	spin_unlock(&data->lock);
 
-	data->pdata->ir_wake_en(1);
 	data->pdata->ir_vdd_onoff(1);
+	data->pdata->ir_wake_en(1);
+	msleep(MC96_POR_DELAY_MS);
 
 	ret = mc96_read_device_info(data);
-	if (ret < 0)
-		goto err_read_device_info;
-	else if (ret < FW_VERSION) {
+	if (ret != FW_VERSION) {
 		pr_info("irled: chip(%04X), bin(%04X), need update\n",
 							ret, FW_VERSION);
-		data->pdata->ir_vdd_onoff(0);
-		data->pdata->ir_wake_en(0);
-		data->pdata->ir_vdd_onoff(1);
+		for (i = 0;i < I2C_RETRY_COUNT;i++) {
+			data->pdata->ir_wake_en(0);
+			data->pdata->ir_vdd_onoff(0);
+			msleep(MC96_OFF_DELAY_MS);
+			data->pdata->ir_vdd_onoff(1);
+			msleep(MC96_POR_DELAY_MS);
 
-		if (mc96_check_boot_checksum(data))
-			pr_info("irled: boot mode, FW download start\n");
-		else
-			goto err_boot_checksum;
-		msleep(30);
-
-		for (i = 0; i < FW_SIZE; i += FW_PACKET_SIZE) {
-			ret = i2c_master_send(client, &FW_binary[i],
-				(i + FW_PACKET_SIZE < FW_SIZE) ?
-				FW_PACKET_SIZE : FW_SIZE - i);
-			if (ret < 0) {
-				pr_err(
-			"irled: update error, count(%d), ret(%d)\n", i, ret);
-				goto err_update;
+			for (j = 0; j < FW_SIZE; j += FW_PACKET_SIZE) {
+				ret = i2c_master_send(client, &FW_binary[j],
+					(j + FW_PACKET_SIZE < FW_SIZE) ?
+					FW_PACKET_SIZE : FW_SIZE - j);
+				if (ret < 0) {
+					pr_err(
+				"irled: update error, count(%d), ret(%d)\n", j, ret);
+					break;
+				}
+				msleep(30);
 			}
-			msleep(30);
+			if (ret < 0)
+				continue;
+
+			if (mc96_check_boot_checksum(data)) {
+				pr_info("irled: FW download complete\n");
+				break;
+			}
+		}
+		if (i == I2C_RETRY_COUNT) {
+			ret = -EINVAL;
+			goto err_update;
 		}
 
-		if (mc96_check_boot_checksum(data))
-			pr_info("irled: FW download complete\n");
-		else
-			goto err_boot_checksum;
-
 		data->pdata->ir_vdd_onoff(0);
-		data->pdata->ir_wake_en(1);
+		msleep(MC96_OFF_DELAY_MS);
 		data->pdata->ir_vdd_onoff(1);
+		data->pdata->ir_wake_en(1);
+		msleep(MC96_POR_DELAY_MS);
 
 		ret = mc96_read_device_info(data);
 		pr_info("irled: user mode, chip(%04X)\n", ret);
 
 		data->pdata->ir_wake_en(0);
 		data->pdata->ir_vdd_onoff(0);
+		msleep(MC96_OFF_DELAY_MS);
 		data->on_off = 0;
 	} else {
 		pr_info("irled: chip(%04X), bin(%04X)\n", ret, FW_VERSION);
 		data->pdata->ir_wake_en(0);
 		data->pdata->ir_vdd_onoff(0);
+		msleep(MC96_OFF_DELAY_MS);
 		data->on_off = 0;
 	}
 
@@ -193,9 +203,9 @@ static int mc96_fw_update(struct sec_irled_data *data)
 	return 0;
 err_read_device_info:
 err_update:
-err_boot_checksum:
 	data->pdata->ir_wake_en(0);
 	data->pdata->ir_vdd_onoff(0);
+	msleep(MC96_OFF_DELAY_MS);
 	data->on_off = 0;
 
 	spin_lock(&data->lock);
@@ -233,7 +243,6 @@ static void sec_irled_send(struct sec_irled_data *data)
 	struct i2c_client *client = data->client;
 
 	int ret;
-	int end_data;
 	int emission_time;
 	unsigned int retry_count = I2C_RETRY_COUNT - 1;
 
@@ -250,10 +259,12 @@ static void sec_irled_send(struct sec_irled_data *data)
 			}
 			data->pdata->ir_wake_en(0);
 			data->pdata->ir_vdd_onoff(0);
+			msleep(MC96_OFF_DELAY_MS);
 			data->on_off = 0;
 
-			data->pdata->ir_wake_en(1);
 			data->pdata->ir_vdd_onoff(1);
+			data->pdata->ir_wake_en(1);
+			msleep(MC96_POR_DELAY_MS);
 			data->on_off = 1;
 		}
 	} while (!ret);
@@ -298,8 +309,9 @@ static ssize_t remocon_store(struct device *dev, struct device_attribute *attr,
 	spin_unlock(&data->lock);
 
 	data->ir_sum = 0;
-	data->pdata->ir_wake_en(1);
 	data->pdata->ir_vdd_onoff(1);
+	data->pdata->ir_wake_en(1);
+	msleep(MC96_POR_DELAY_MS);
 	data->on_off = 1;
 
 	data->ir_freq = _data;
@@ -334,6 +346,7 @@ static ssize_t remocon_store(struct device *dev, struct device_attribute *attr,
 
 	data->pdata->ir_wake_en(0);
 	data->pdata->ir_vdd_onoff(0);
+	msleep(MC96_OFF_DELAY_MS);
 	data->on_off = 0;
 
 	spin_lock(&data->lock);
@@ -433,8 +446,9 @@ static ssize_t check_ir_show(struct device *dev, struct device_attribute *attr,
 	data->busy_flag = true;
 	spin_unlock(&data->lock);
 
-	data->pdata->ir_wake_en(1);
 	data->pdata->ir_vdd_onoff(1);
+	data->pdata->ir_wake_en(1);
+	msleep(MC96_POR_DELAY_MS);
 	data->on_off = 1;
 
 	ret = mc96_read_device_info(data);
@@ -443,6 +457,7 @@ static ssize_t check_ir_show(struct device *dev, struct device_attribute *attr,
 
 	data->pdata->ir_wake_en(0);
 	data->pdata->ir_vdd_onoff(0);
+	msleep(MC96_OFF_DELAY_MS);
 	data->on_off = 0;
 
 	spin_lock(&data->lock);
@@ -487,7 +502,11 @@ static int __devinit sec_irled_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, data);
 	spin_lock_init(&data->lock);
 
-	mc96_fw_update(data);
+	ret = mc96_fw_update(data);
+	if (ret < 0) {
+		pr_err("irled: failed to update firmware\n");
+		goto err_free_mem;
+	}
 
 	if (!sec_class) {
 		pr_err("irled: sec_class is invalid\n");
@@ -562,6 +581,7 @@ static int sec_irled_suspend(struct device *dev)
 	if (data->on_off) {
 		data->pdata->ir_wake_en(0);
 		data->pdata->ir_vdd_onoff(0);
+		msleep(MC96_OFF_DELAY_MS);
 		data->on_off = 0;
 	}
 

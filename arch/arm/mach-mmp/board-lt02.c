@@ -124,6 +124,9 @@
 #ifdef CONFIG_SAMSUNG_JACK
 #include <linux/mfd/sec_jack.h>
 #endif
+#ifdef CONFIG_SEC_THERMISTOR
+#include <mach/sec_thermistor.h>
+#endif
 
 #include "board-lt02.h"
 
@@ -132,7 +135,7 @@
 static int board_id;
 static int production_mode_flag;
 int panel_id;
-
+int recovery_mode;
 unsigned int sec_debug_mode;
 EXPORT_SYMBOL(sec_debug_mode);
 
@@ -259,6 +262,16 @@ static int __init panel_id_setup(char *str)
 	return 1;
 }
 __setup("panel_id=", panel_id_setup);
+
+static int __init recovery_mode_setup(char *str)
+{
+	int n;
+	if (!get_option(&str, &n))
+		return 0;
+	recovery_mode = n;
+	return 1;
+}
+__setup("recovery_mode=", recovery_mode_setup);
 
 #if defined(CONFIG_TC35876X)
 static int tc358765_init(void)
@@ -423,10 +436,21 @@ static int pm800_plat_config(struct pm80x_chip *chip,
 				struct pm80x_platform_data *pdata)
 {
 	int data, i;
+	int reg;
+
 	if (!chip || !pdata || !chip->regmap || !chip->subchip
 	    || !chip->subchip->regmap_power) {
 		pr_err("%s:chip or pdata is not availiable!\n", __func__);
 		return -EINVAL;
+	}
+
+	reg = 0xD0;
+	for (i = 0; i < 0x20; i++ ) {
+		regmap_read(chip->regmap, reg, &data);
+		printk("[0x%2x: 0x%2x] ", reg, data);
+		reg ++;
+		if ((i+1)%8 == 0)
+			printk("\n");
 	}
 
 	/* RESET_OUTn, RTC_RESET_MODE =0 */
@@ -583,8 +607,343 @@ static int pm800_plat_config(struct pm80x_chip *chip,
 //		pr_info("bt532: TSP VENDOR %x\n",data);
 #endif
 
+	/* disable over voltage on VSYS node */
+	regmap_write(chip->regmap, 0x1f, 0x01);
+	regmap_write(chip->subchip->regmap_test, 0x43, 0xff);
+	regmap_write(chip->subchip->regmap_test, 0x44, 0xbf);
+	regmap_write(chip->subchip->regmap_test, 0x45, 0xff);
+	regmap_write(chip->subchip->regmap_test, 0x46, 0x16);
+	regmap_write(chip->regmap, 0x1f, 0x0);
+
 	return 0;
 }
+
+static int pm805_workaround(struct pm80x_chip *chip)
+{
+	static unsigned char buf[65];
+	/* 1 */
+	regmap_write(chip->regmap, 0xfa, 0x0);
+	regmap_write(chip->regmap, 0xfb, 0x0);
+	/* 2 */
+	pm800_extern_write(PM80X_BASE_PAGE, 0xd0, 0x80);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x0d, 0x80);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x1d, 0x01);
+	pm800_extern_write(PM80X_BASE_PAGE, 0x21, 0x20);
+	pm800_extern_write(PM80X_BASE_PAGE, 0xe2, 0x2a);
+
+	/* 3 */
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	regmap_write(chip->regmap, 0xbd, 0x80);
+	msleep(10);
+	regmap_write(chip->regmap, 0x01, 0x03);
+	regmap_write(chip->regmap, 0x80, 0xad);
+	msleep(20);
+
+	/* 4 */
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	regmap_write(chip->regmap, 0xc1, 0xe0);
+	msleep(200);
+	regmap_write(chip->regmap, 0x29, 0x08);
+	regmap_write(chip->regmap, 0x26, 0x0);
+	msleep(20);
+	regmap_write(chip->regmap, 0x01, 0x02);
+	regmap_write(chip->regmap, 0x80, 0x00);
+	regmap_write(chip->regmap, 0x01, 0x03);
+	msleep(20);
+
+	/* 5 */
+	regmap_write(chip->regmap, 0x07, 0x00);
+	regmap_write(chip->regmap, 0x08, 0x00);
+	regmap_write(chip->regmap, 0x0a, 0x04);
+	regmap_write(chip->regmap, 0x80, 0x00);
+	regmap_write(chip->regmap, 0x82, 0x10);
+	regmap_write(chip->regmap, 0x95, 0x44);
+	regmap_write(chip->regmap, 0x96, 0x71);
+	regmap_write(chip->regmap, 0x97, 0x12);
+	regmap_write(chip->regmap, 0x99, 0xf0);
+	regmap_write(chip->regmap, 0xbd, 0x00);
+	regmap_write(chip->regmap, 0xbf, 0x00);
+	regmap_write(chip->regmap, 0xcc, 0x00);
+	regmap_write(chip->regmap, 0xcd, 0x00);
+	regmap_write(chip->regmap, 0xce, 0x04);
+	regmap_write(chip->regmap, 0xcf, 0x00);
+	regmap_write(chip->regmap, 0xd0, 0x00);
+	regmap_write(chip->regmap, 0xd1, 0x00);
+	regmap_write(chip->regmap, 0xdc, 0x00);
+	regmap_write(chip->regmap, 0xdd, 0x00);
+	regmap_write(chip->regmap, 0xde, 0x00);
+	regmap_write(chip->regmap, 0xe2, 0x00);
+	regmap_write(chip->regmap, 0xe3, 0x58);
+
+	/* 6 */
+	regmap_write(chip->regmap, 0x02, 0x00);
+	regmap_write(chip->regmap, 0x03, 0x00);
+	regmap_write(chip->regmap, 0x04, 0x00);
+	regmap_write(chip->regmap, 0x05, 0x00);
+	regmap_write(chip->regmap, 0x06, 0x00);
+	regmap_write(chip->regmap, 0x10, 0x14);
+	regmap_write(chip->regmap, 0x11, 0x00);
+	regmap_write(chip->regmap, 0x12, 0x00);
+	regmap_write(chip->regmap, 0x13, 0x00);
+	regmap_write(chip->regmap, 0x14, 0x00);
+	regmap_write(chip->regmap, 0x15, 0x00);
+	regmap_write(chip->regmap, 0x16, 0x00);
+	regmap_write(chip->regmap, 0x20, 0x12);
+	regmap_write(chip->regmap, 0x21, 0x38);
+	regmap_write(chip->regmap, 0x22, 0x00);
+	regmap_write(chip->regmap, 0x23, 0x1b);
+	regmap_write(chip->regmap, 0x24, 0x00);
+	regmap_write(chip->regmap, 0x25, 0x00);
+	regmap_write(chip->regmap, 0x26, 0x00);
+	regmap_write(chip->regmap, 0x27, 0x00);
+	regmap_write(chip->regmap, 0x29, 0x08);
+	regmap_write(chip->regmap, 0x2a, 0x00);
+	regmap_write(chip->regmap, 0x30, 0x1f);
+	regmap_write(chip->regmap, 0x31, 0x4c);
+	regmap_write(chip->regmap, 0x32, 0x04);
+	regmap_write(chip->regmap, 0x33, 0x00);
+	regmap_write(chip->regmap, 0x34, 0x00);
+	regmap_write(chip->regmap, 0x35, 0x14);
+	regmap_write(chip->regmap, 0x36, 0x23);
+	regmap_write(chip->regmap, 0x37, 0x04);
+	regmap_write(chip->regmap, 0x38, 0x00);
+	regmap_write(chip->regmap, 0x39, 0x14);
+	regmap_write(chip->regmap, 0x3b, 0x00);
+	regmap_write(chip->regmap, 0x3c, 0x23);
+	regmap_write(chip->regmap, 0x3d, 0x01);
+	regmap_write(chip->regmap, 0x3e, 0x00);
+	regmap_write(chip->regmap, 0x3f, 0x00);
+	regmap_write(chip->regmap, 0x40, 0x00);
+	regmap_write(chip->regmap, 0x41, 0x00);
+	regmap_write(chip->regmap, 0x42, 0x00);
+	regmap_write(chip->regmap, 0x50, 0x00);
+	regmap_write(chip->regmap, 0x51, 0x00);
+	regmap_write(chip->regmap, 0x52, 0x01);
+	regmap_write(chip->regmap, 0x53, 0x01);
+	regmap_write(chip->regmap, 0x54, 0x55);
+	regmap_write(chip->regmap, 0x55, 0x20);
+	regmap_write(chip->regmap, 0x56, 0x00);
+	regmap_write(chip->regmap, 0x57, 0x00);
+	regmap_write(chip->regmap, 0x58, 0x00);
+	regmap_write(chip->regmap, 0x59, 0x00);
+	regmap_write(chip->regmap, 0x5a, 0x00);
+	regmap_write(chip->regmap, 0x5b, 0x01);
+
+	buf[0] = 0x5c;
+	buf[1] = 0x0;
+	buf[2] = 0x0;
+	buf[3] = 0x0;
+	buf[4] = 0x0;
+	buf[5] = 0x0;
+	buf[6] = 0x0;
+	buf[7] = 0x0;
+	buf[8] = 0x0;
+	buf[9] = 0x0;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x04;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x08;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x0c;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x10;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x14;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x18;
+	i2c_master_send(chip->client, &buf[0], 10);
+
+	buf[1] = 0x1c;
+	i2c_master_send(chip->client, &buf[0], 10);
+	regmap_write(chip->regmap, 0x5b, 0x02);
+
+	buf[0] = 0x5c;
+	buf[1] = 0x0;
+	buf[2] = 0x10;
+	buf[3] = 0x00;
+	buf[4] = 0x00;
+	buf[5] = 0x00;
+	buf[6] = 0x00;
+	buf[7] = 0x00;
+	buf[8] = 0x00;
+	buf[9] = 0x00;
+	buf[10] = 0x00;
+	buf[11] = 0x00;
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x03);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x04);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x05);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x06);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x07);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x08);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x09);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0a);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0b);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0c);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0d);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0e);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x0f);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x10);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x11);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x12);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x13);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x14);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5b, 0x15);
+	i2c_master_send(chip->client, &buf[0], 12);
+
+	regmap_write(chip->regmap, 0x5d, 0x01);
+	regmap_write(chip->regmap, 0x5d, 0x00);
+	regmap_write(chip->regmap, 0x5b, 0x00);
+	regmap_write(chip->regmap, 0x84, 0x88);
+	regmap_write(chip->regmap, 0x85, 0x16);
+	regmap_write(chip->regmap, 0x86, 0x16);
+	regmap_write(chip->regmap, 0x87, 0x00);
+	regmap_write(chip->regmap, 0x88, 0x40);
+	regmap_write(chip->regmap, 0x8a, 0x08);
+	regmap_write(chip->regmap, 0x8b, 0x05);
+	regmap_write(chip->regmap, 0x8c, 0x00);
+	regmap_write(chip->regmap, 0x8d, 0x00);
+	regmap_write(chip->regmap, 0x8e, 0x09);
+	regmap_write(chip->regmap, 0x8f, 0x00);
+	regmap_write(chip->regmap, 0x90, 0x7e);
+	regmap_write(chip->regmap, 0x91, 0x03);
+	regmap_write(chip->regmap, 0x92, 0x55);
+	regmap_write(chip->regmap, 0x93, 0x04);
+	regmap_write(chip->regmap, 0x94, 0x02);
+	regmap_write(chip->regmap, 0x99, 0xf0);
+	regmap_write(chip->regmap, 0x9a, 0x12);
+
+	regmap_write(chip->regmap, 0xa0, 0x00);
+	regmap_write(chip->regmap, 0xa1, 0x00);
+	regmap_write(chip->regmap, 0xa2, 0x00);
+	regmap_write(chip->regmap, 0xa3, 0x00);
+	regmap_write(chip->regmap, 0xa4, 0x00);
+	regmap_write(chip->regmap, 0xa5, 0x00);
+	regmap_write(chip->regmap, 0xa6, 0x00);
+	regmap_write(chip->regmap, 0xa7, 0x00);
+	regmap_write(chip->regmap, 0xa8, 0x00);
+	regmap_write(chip->regmap, 0xaa, 0x00);
+	regmap_write(chip->regmap, 0xac, 0x00);
+	regmap_write(chip->regmap, 0xae, 0x00);
+
+	regmap_write(chip->regmap, 0xb0, 0x00);
+	regmap_write(chip->regmap, 0xb2, 0x00);
+	regmap_write(chip->regmap, 0xb4, 0x00);
+	regmap_write(chip->regmap, 0xb6, 0x00);
+	regmap_write(chip->regmap, 0xb8, 0x00);
+	regmap_write(chip->regmap, 0xba, 0x00);
+	regmap_write(chip->regmap, 0xbc, 0x00);
+
+	regmap_write(chip->regmap, 0xc1, 0x00);
+	regmap_write(chip->regmap, 0xc2, 0x00);
+	regmap_write(chip->regmap, 0xc3, 0x00);
+	regmap_write(chip->regmap, 0xc4, 0x00);
+	regmap_write(chip->regmap, 0xc9, 0x00);
+	regmap_write(chip->regmap, 0xca, 0x00);
+
+	regmap_write(chip->regmap, 0xd2, 0x00);
+	regmap_write(chip->regmap, 0xd3, 0x00);
+	regmap_write(chip->regmap, 0xd4, 0x00);
+	regmap_write(chip->regmap, 0xd5, 0x00);
+	regmap_write(chip->regmap, 0xd6, 0x00);
+	regmap_write(chip->regmap, 0xd7, 0x00);
+	regmap_write(chip->regmap, 0xd8, 0x00);
+	regmap_write(chip->regmap, 0xd9, 0x00);
+	regmap_write(chip->regmap, 0xda, 0x00);
+	regmap_write(chip->regmap, 0xdb, 0x00);
+	regmap_write(chip->regmap, 0x01, 0x02);
+
+	msleep(10);
+	regmap_write(chip->regmap, 0xfc, 0x00);
+
+	pm800_extern_write(PM80X_BASE_PAGE, 0xe2, 0x2a);
+	msleep(1);
+
+	return 0;
+}
+
+static int pm805_plat_config(struct pm80x_chip *chip,
+				struct pm80x_platform_data *pdata)
+{
+	if (!chip || !pdata || !chip->regmap) {
+		pr_err("%s:chip or pdata is not availiable!\n", __func__);
+		return -EINVAL;
+	}
+
+	/* workaround */
+	pm805_workaround(chip);
+
+	return 0;
+}
+
 
 #ifdef CONFIG_SAMSUNG_JACK
 static struct sec_jack_zone sec_jack_zones[] = {
@@ -743,6 +1102,7 @@ static struct pm80x_platform_data pm800_info = {
 
 static struct pm80x_platform_data pm805_info = {
 	.irq_mode = 0,
+	.plat_config = pm805_plat_config,
 };
 
 static void pm800_dvctable_init(void)
@@ -1547,20 +1907,18 @@ static void emeidkb_8787_set_power(unsigned int on)
 		/* Only when SD8787 are active (power on),
 		 * it is meanful to enable the edge wakeup
 		 */
-		if (cpu_pxa98x_stepping() < PXA98X_Z3 || cpu_is_pxa986_z3())
-			mmp_gpio_edge_add(&gpio_edge_sdio_dat1);
+		mmp_gpio_edge_add(&gpio_edge_sdio_dat1);
 
 		/*disable buck2 sleep mode when wifi power on*/
 		pm800_extern_setbits(PM80X_POWER_PAGE, PM800_BUCK_SLP1,
-					PM800_BUCK2_SLP1_MASK, PM800_BUCK2_SLP1_MASK);
+				PM800_BUCK2_SLP1_MASK, PM800_BUCK2_SLP1_MASK);
 	}
 
 	if (!on && enabled) {
 		regulator_disable(wib_3v3);
 		enabled = 0;
 
-		if (cpu_pxa98x_stepping() < PXA98X_Z3 || cpu_is_pxa986_z3())
-			mmp_gpio_edge_del(&gpio_edge_sdio_dat1);
+		mmp_gpio_edge_del(&gpio_edge_sdio_dat1);
 
 		/*enable buck2 sleep mode when wifi power off*/
 		pm800_extern_setbits(PM80X_POWER_PAGE, PM800_BUCK_SLP1,
@@ -2103,6 +2461,241 @@ static void __init pxa988_init_device_ddrdevfreq(void)
 }
 #endif
 
+#if defined(CONFIG_SEC_THERMISTOR)
+#if defined(CONFIG_MACH_LT02LGT)
+static int siop_table[] = {420, 440, 460, 520, 540};
+#else
+static int siop_table[] = {400, 420, 440, 600, 650};
+#endif
+/* when the next level is same as prev, returns -1 */
+static int get_pxa986_siop_level(int temp)
+{
+	static int prev_temp = 300;
+	static int prev_level;
+	int level = -1;
+
+	if (temp > prev_temp) {
+		level = 4;
+		while (level > 0 && temp < siop_table[level])
+			level--;
+	} else {
+		level = 0;
+		while (level < 4 && temp >= siop_table[level])
+			level++;
+
+		if (level > prev_level)
+			level = prev_level;
+	}
+
+	prev_temp = temp;
+	if (prev_level == level)
+		return -1;
+
+	prev_level = level;
+
+	return level;
+}
+
+#ifdef CONFIG_WIFIONLY_BOARD
+static struct sec_therm_adc_table adc_ch0_table[] = {
+	/* ADC, Temperature */
+	{ 66,   700 },
+	{ 67,   690 },
+	{ 69,   680 },
+	{ 73,   670 },
+	{ 78,   660 },
+	{ 82,   650 },
+	{ 88,   640 },
+	{ 90,   630 },
+	{ 93,   620 },
+	{ 96,   610 },
+	{ 99,   600 },
+	{ 101,  590 },
+	{ 103,  580 },
+	{ 106,  570 },
+	{ 108,  560 },
+	{ 113,  550 },
+	{ 117,  540 },
+	{ 121,  530 },
+	{ 125,  520 },
+	{ 129,  510 },
+	{ 133,  500 },
+	{ 138,  490 },
+	{ 142,  480 },
+	{ 145,  470 },
+	{ 151,  460 },
+	{ 155,  450 },
+	{ 161,  440 },
+	{ 166,  430 },
+	{ 171,  420 },
+	{ 179,  410 },
+	{ 184,  400 },
+	{ 192,  390 },
+	{ 198,  380 },
+	{ 205,  370 },
+	{ 212,  360 },
+	{ 218,  350 },
+	{ 227,  340 },
+	{ 236,  330 },
+	{ 247,  320 },
+	{ 255,  310 },
+	{ 264,  300 },
+	{ 275,  290 },
+	{ 288,  280 },
+	{ 297,  270 },
+	{ 308,  260 },
+	{ 314,  250 },
+	{ 320,  240 },
+	{ 345,  230 },
+	{ 357,  220 },
+	{ 370,  210 },
+	{ 382,  200 },
+	{ 396,  190 },
+	{ 411,  180 },
+	{ 427,  170 },
+	{ 442,  160 },
+	{ 458,  150 },
+	{ 479,  140 },
+	{ 498,  130 },
+	{ 520,  120 },
+	{ 541,  110 },
+	{ 562,  100 },
+	{ 587,  90 },
+	{ 618,  80 },
+	{ 642,  70 },
+	{ 668,  60 },
+	{ 694,  50 },
+	{ 707,  40 },
+	{ 718,  30 },
+	{ 735,  20 },
+	{ 750,  10 },
+	{ 763,  0 },
+	{ 795,  -10 },
+	{ 829,  -20 },
+	{ 862,  -30 },
+	{ 890,  -40 },
+	{ 921,  -50 },
+	{ 970,  -60 },
+	{ 1015,  -70 },
+	{ 1064,  -80 },
+	{ 1106,  -90 },
+	{ 1148,  -100 },
+};
+#else
+static struct sec_therm_adc_table adc_ch0_table[] = {
+	/* ADC, Temperature */
+	{ 75,   -200 },
+	{ 79,   -190 },
+	{ 84,   -180 },
+	{ 89,   -170 },
+	{ 93,   -160 },
+	{ 97,   -150 },
+	{ 102,  -140 },
+	{ 108,  -130 },
+	{ 113,  -120 },
+	{ 119,  -110 },
+	{ 125,  -100 },
+	{ 130,  -90 },
+	{ 136,  -80 },
+	{ 141,  -70 },
+	{ 147,  -60 },
+	{ 153,  -50 },
+	{ 162,  -40 },
+	{ 171,  -30 },
+	{ 181,  -20 },
+	{ 190,  -10 },
+	{ 199,  0 },
+	{ 209,  10 },
+	{ 219,  20 },
+	{ 230,  30 },
+	{ 240,  40 },
+	{ 250,  50 },
+	{ 262,  60 },
+	{ 275,  70 },
+	{ 287,  80 },
+	{ 300,  90 },
+	{ 312,  100 },
+	{ 326,  110 },
+	{ 339,  120 },
+	{ 353,  130 },
+	{ 366,  140 },
+	{ 380,  150 },
+	{ 395,  160 },
+	{ 410,  170 },
+	{ 426,  180 },
+	{ 441,  190 },
+	{ 456,  200 },
+	{ 472,  210 },
+	{ 488,  220 },
+	{ 505,  230 },
+	{ 521,  240 },
+	{ 537,  250 },
+	{ 555,  260 },
+	{ 573,  270 },
+	{ 590,  280 },
+	{ 608,  290 },
+	{ 626,  300 },
+	{ 647,  310 },
+	{ 667,  320 },
+	{ 688,  330 },
+	{ 708,  340 },
+	{ 729,  350 },
+	{ 748,  360 },
+	{ 767,  370 },
+	{ 785,  380 },
+	{ 804,  390 },
+	{ 823,  400 },
+	{ 842,  410 },
+	{ 862,  420 },
+	{ 881,  430 },
+	{ 901,  440 },
+	{ 920,  450 },
+	{ 939,  460 },
+	{ 958,  470 },
+	{ 978,  480 },
+	{ 997,  490 },
+	{ 1016,  500 },
+	{ 1034,  510 },
+	{ 1052,  520 },
+	{ 1069,  530 },
+	{ 1087,  540 },
+	{ 1105,  550 },
+	{ 1122,  560 },
+	{ 1139,  570 },
+	{ 1157,  580 },
+	{ 1174,  590 },
+	{ 1191,  600 },
+	{ 1208,  610 },
+	{ 1225,  620 },
+	{ 1241,  630 },
+	{ 1258,  640 },
+	{ 1275,  650 },
+	{ 1288,  660 },
+	{ 1301,  670 },
+	{ 1313,  680 },
+	{ 1326,  690 },
+	{ 1339,  700 },
+	{ 1350,  710 },
+	{ 1362,  720 },
+	{ 1373,  730 },
+	{ 1385,  740 },
+	{ 1396,  750 },
+};
+#endif
+
+static struct sec_therm_platform_data sec_therm_pdata = {
+	.adc_arr_size	= ARRAY_SIZE(adc_ch0_table),
+	.adc_table	= adc_ch0_table,
+	.polling_interval = 30 * 1000, /* msecs */
+	.get_siop_level = get_pxa986_siop_level,
+};
+
+static struct platform_device sec_device_thermistor = {
+	.name = "sec-thermistor",
+	.id = -1,
+	.dev.platform_data = &sec_therm_pdata,
+};
+#endif /* CONFIG_SEC_THERMISTOR */
 /* clk usage desciption */
 MMP_HW_DESC(fb, "pxa168-fb", 0, PM_QOS_CPUIDLE_BLOCK_DDR_VALUE, "LCDCLK");
 struct mmp_hw_desc *emei_dkb_hw_desc[] __initdata = {
@@ -2308,11 +2901,16 @@ static void create_sirf_proc_file(void)
 static struct timer_list uart_constraint_timer;
 static struct pm_qos_request uart_lpm_cons;
 static const char uart_cons_name[] = "uart rx pad";
+static struct wakeup_source uart_ws;
+static struct work_struct uart_wakeup_work;
+
 static void uart_add_constraint(int mfp, void *unused)
 {
 	if (!mod_timer(&uart_constraint_timer, jiffies + 3 * HZ))
 		pm_qos_update_request(&uart_lpm_cons,
 			PM_QOS_CPUIDLE_BLOCK_AXI_VALUE);
+	/* Refer to wlan_edge_wakeup() for why using work_queue here. */
+	schedule_work(&uart_wakeup_work);
 }
 
 static void uart_timer_handler(unsigned long data)
@@ -2321,10 +2919,21 @@ static void uart_timer_handler(unsigned long data)
 		PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
 }
 
+static void uart_wakeup(struct work_struct *work)
+{
+	__pm_wakeup_event(&uart_ws, 3000); /* time in milliseconds */
+}
+
 struct gpio_edge_desc uart_rx_pad = {
 	.mfp = MFP_PIN_GPIO47, /* ap UART rx */
 	.handler = uart_add_constraint,
 };
+
+static void uart_wakeup_init(void)
+{
+	INIT_WORK(&uart_wakeup_work, uart_wakeup);
+	wakeup_source_init(&uart_ws, "uart");
+}
 
 #define PM800_SW_PDOWN			(1 << 5)
 #define PM800_USER_DATA3		0xEA
@@ -2679,6 +3288,9 @@ static void __init emeidkb_init(void)
 #ifdef CONFIG_PXA9XX_ACIPC
 	platform_device_register(&pxa9xx_device_acipc);
 #endif
+#ifdef CONFIG_SEC_THERMISTOR
+	platform_device_register(&sec_device_thermistor);
+#endif
 	pxa988_add_thermal();
 
 #ifdef CONFIG_PROC_FS
@@ -2686,6 +3298,7 @@ static void __init emeidkb_init(void)
 	create_sirf_proc_file();
 #endif
 	/* add uart pad wakeup */
+	uart_wakeup_init();
 	mmp_gpio_edge_add(&uart_rx_pad);
 	uart_lpm_cons.name = uart_cons_name;
 	pm_qos_add_request(&uart_lpm_cons,

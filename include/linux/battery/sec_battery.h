@@ -60,9 +60,6 @@ struct sec_battery_info {
 	int voltage_ocv;		/* open circuit voltage (mV) */
 	int current_now;		/* current (mA) */
 	int current_avg;		/* average current (mA) */
-	int up_threshold;
-	int down_threshold;
-	int polling_interval;
 	int current_adc;
 
 	unsigned int capacity;			/* SOC (%) */
@@ -139,6 +136,7 @@ struct sec_battery_info {
 	bool slate_mode;
 
 	int siop_level;
+	int siop_activated;
 };
 
 ssize_t sec_bat_show_attrs(struct device *dev,
