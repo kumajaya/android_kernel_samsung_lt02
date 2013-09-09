@@ -3175,14 +3175,75 @@ static ssize_t show_cmd_result(struct device *dev, struct device_attribute
 					"%s\n", finfo->cmd_result);
 }
 
+static ssize_t bt532_orientation_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct bt532_ts_info *info = dev_get_drvdata(dev);
+	struct i2c_client *client = info->client;
+	struct bt532_ts_platform_data *pdata = client->dev.platform_data;
+	int count;
+
+	count = sprintf(buf, "%d\n", pdata->orientation);
+	pr_info("tsp: orientation value=%d\n", pdata->orientation);
+
+	return count;
+}
+
+ssize_t bt532_orientation_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct bt532_ts_info *info = dev_get_drvdata(dev);
+	struct i2c_client *client = info->client;
+	struct bt532_ts_platform_data *pdata = client->dev.platform_data;
+	int orientation;
+
+	if (kstrtoint(buf, 0, &orientation))
+		pr_err("tsp: failed storing orientation value\n");
+
+	if (orientation < 0) {
+		orientation = 0;
+	} else if (orientation > 7) {
+		orientation = 7;
+	}
+
+	if (pdata->orientation != orientation) {
+		if (orientation & TOUCH_XY_SWAP) {
+			input_set_abs_params(info->input_dev, ABS_MT_POSITION_Y,
+				info->cap_info.MinX,
+				info->cap_info.MaxX + ABS_PT_OFFSET,
+				0, 0);
+			input_set_abs_params(info->input_dev, ABS_MT_POSITION_X,
+				info->cap_info.MinY,
+				info->cap_info.MaxY + ABS_PT_OFFSET,
+				0, 0);
+		} else {
+			input_set_abs_params(info->input_dev, ABS_MT_POSITION_X,
+				info->cap_info.MinX,
+				info->cap_info.MaxX + ABS_PT_OFFSET,
+				0, 0);
+			input_set_abs_params(info->input_dev, ABS_MT_POSITION_Y,
+				info->cap_info.MinY,
+				info->cap_info.MaxY + ABS_PT_OFFSET,
+				0, 0);
+		}
+		pdata->orientation = orientation;
+		pr_info("tsp: orientation=%d\n", orientation);
+	}
+
+	return size;
+}
+
 static DEVICE_ATTR(cmd, S_IWUSR | S_IWGRP, NULL, store_cmd);
 static DEVICE_ATTR(cmd_status, S_IRUGO, show_cmd_status, NULL);
 static DEVICE_ATTR(cmd_result, S_IRUGO, show_cmd_result, NULL);
+static DEVICE_ATTR(orientation, S_IRUGO | S_IWUSR, bt532_orientation_show, bt532_orientation_store);
 
 static struct attribute *touchscreen_attributes[] = {
 	&dev_attr_cmd.attr,
 	&dev_attr_cmd_status.attr,
 	&dev_attr_cmd_result.attr,
+	&dev_attr_orientation.attr,
 	NULL,
 };
 
