@@ -2076,6 +2076,20 @@ config CMDLINE_FORCE
 	  command-line options your boot loader passes to the kernel.
 endchoice
 
+config CMDLINE_INITRD_SIZE_OVERRIDE
+	bool "Override bootloader initrd size"
+	depends on BLK_DEV_INITRD && !CMDLINE_FORCE
+	default n
+	help
+	  Override boot loader initrd size argument.
+	  This is useful to enlarge initrd size limitation. For example,
+	  in Samsung's PXA988 LT02 Development Board limited in 1MB.
+
+config CMDLINE_INITRD_SIZE
+	string "Initrd size"
+	depends on CMDLINE_INITRD_SIZE_OVERRIDE
+	default "3m"
+
 config XIP_KERNEL
 	bool "Kernel Execute-In-Place from ROM"
 	depends on !ZBOOT_ROM && !ARM_LPAE

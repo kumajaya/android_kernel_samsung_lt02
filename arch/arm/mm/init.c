@@ -45,7 +45,11 @@ static int __init early_initrd(char *p)
 
 	start = memparse(p, &endp);
 	if (*endp == ',') {
+#ifndef CONFIG_CMDLINE_INITRD_SIZE_OVERRIDE
 		size = memparse(endp + 1, NULL);
+#else
+		size = memparse(CONFIG_CMDLINE_INITRD_SIZE, NULL);
+#endif
 
 		phys_initrd_start = start;
 		phys_initrd_size = size;
