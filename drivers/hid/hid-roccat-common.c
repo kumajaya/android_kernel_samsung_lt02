@@ -12,6 +12,7 @@
  */
 
 #include <linux/slab.h>
+#include <linux/module.h>
 #include "hid-roccat-common.h"
 
 int roccat_common_receive(struct usb_device *usb_dev, uint usb_command,
