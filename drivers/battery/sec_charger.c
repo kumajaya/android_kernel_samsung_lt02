@@ -74,15 +74,13 @@ static int sec_chg_set_property(struct power_supply *psy,
 			charger->pdata->charging_current[
 			val->intval].fast_charging_current;
 
-		if ((charger->pdata->siop_activated) &&
-		    ((charger->cable_type == POWER_SUPPLY_TYPE_MAINS) ||
-		     (charger->cable_type == POWER_SUPPLY_TYPE_MISC))) {
-			charger->input_current = input_current[
-				charger->pdata->siop_level];
-		} else {
+		if (!charger->pdata->siop_activated) {
 			charger->input_current =
 				charger->pdata->charging_current[
 					val->intval].input_current_limit;
+		} else {
+			charger->input_current = input_current[
+				charger->pdata->siop_level];
 		}
 
 		if (!sec_hal_chg_set_property(charger->client, psp, val))
@@ -297,8 +295,6 @@ static int __devinit sec_charger_probe(
 	charger->psy_chg.set_property	= sec_chg_set_property;
 	charger->psy_chg.properties	= sec_charger_props;
 	charger->psy_chg.num_properties	= ARRAY_SIZE(sec_charger_props);
-
-	charger->cable_type = POWER_SUPPLY_TYPE_BATTERY;
 
 	if (!charger->pdata->chg_gpio_init()) {
 		dev_err(&client->dev,

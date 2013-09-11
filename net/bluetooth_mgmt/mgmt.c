@@ -1317,9 +1317,9 @@ static int disconnect(struct sock *sk, u16 index, void *data, u16 len)
 	}
 
 	if (mgmt_pending_find(MGMT_OP_DISCONNECT, hdev)) {
-		//err = cmd_status(sk, index, MGMT_OP_DISCONNECT,
-		//					MGMT_STATUS_BUSY);
-		//goto failed;
+		err = cmd_status(sk, index, MGMT_OP_DISCONNECT,
+							MGMT_STATUS_BUSY);
+		goto failed;
 	}
 
 	if (cp->addr.type == MGMT_ADDR_BREDR)

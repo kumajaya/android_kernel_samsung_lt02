@@ -46,7 +46,6 @@ extern struct attribute_group pxa_android_power_sysfs_files;
 #ifdef CONFIG_LCD_MDNIE_ENABLE
 extern struct device_attribute dev_attr_tuning;
 #endif
-extern struct device_attribute dev_attr_lvds_clk_switch;
 
 extern u32 clk_reg(int id, u32 type);
 extern void vsync_check_count(void);

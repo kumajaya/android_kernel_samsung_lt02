@@ -1796,6 +1796,7 @@ config FORCE_MAX_ZONEORDER
 	int "Maximum zone order" if ARCH_SHMOBILE
 	range 11 64 if ARCH_SHMOBILE
 	default "9" if SA1111
+	default "16" if ARCH_MMP
 	default "11"
 	help
 	  The kernel memory allocator divides physically contiguous memory
@@ -2320,10 +2321,6 @@ config NEON
 	  Say Y to include support code for NEON, the ARMv7 Advanced SIMD
 	  Extension.
 
-config GPU_RESERVE_MEM
-	bool "GC video memory allocator"
-	help
-		reserve memory for GC as video memory
 endmenu
 
 menu "Userspace binary formats"

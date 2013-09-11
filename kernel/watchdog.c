@@ -25,9 +25,6 @@
 
 #include <asm/irq_regs.h>
 #include <linux/perf_event.h>
-#ifdef CONFIG_CORESIGHT_SUPPORT
-#include <mach/regs-coresight.h>
-#endif
 
 int watchdog_enabled = 1;
 int __read_mostly watchdog_thresh = 10;
@@ -44,10 +41,6 @@ static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts);
 static DEFINE_PER_CPU(unsigned long, hrtimer_interrupts_saved);
 static DEFINE_PER_CPU(struct perf_event *, watchdog_ev);
 #endif
-
-#ifdef CONFIG_SMP_HARDLOCKUP_DETECTOR
-static DEFINE_PER_CPU(unsigned long, hardlockup_touch_ts);
-#endif /* CONFIG_SMP_HARDLOCKUP_DETECTOR */
 
 /* boot commands */
 /*
@@ -206,31 +199,6 @@ static int is_softlockup(unsigned long touch_ts)
 	return 0;
 }
 
-#ifdef CONFIG_SMP_HARDLOCKUP_DETECTOR
-DEFINE_SPINLOCK(hardlockup_lock);
-static void smp_check_and_update_hardlockup(void)
-{
-	int cpu;
-	unsigned long now = get_timestamp(0);
-
-	spin_lock(&hardlockup_lock);
-	for_each_online_cpu(cpu) {
-		if (cpu == smp_processor_id()) {
-			per_cpu(hardlockup_touch_ts, cpu) = now;
-		} else if (time_after(now, per_cpu(hardlockup_touch_ts, cpu)
-					   + watchdog_thresh)) {
-			WARN(1, "cpu%d detected cpu%d has HARDLOCKUP!\n",
-			      smp_processor_id(), cpu);
-#ifdef CONFIG_CORESIGHT_SUPPORT
-			coresight_panic_locked_cpu(cpu);
-#endif
-			per_cpu(hardlockup_touch_ts, cpu) = now;
-		}
-	}
-	spin_unlock(&hardlockup_lock);
-}
-#endif /* CONFIG_SMP_HARDLOCKUP_DETECTOR */
-
 #ifdef CONFIG_HARDLOCKUP_DETECTOR
 
 static struct perf_event_attr wd_hw_attr = {
@@ -296,10 +264,6 @@ static enum hrtimer_restart watchdog_timer_fn(struct hrtimer *hrtimer)
 
 	/* kick the hardlockup detector */
 	watchdog_interrupt_count();
-
-#ifdef CONFIG_SMP_HARDLOCKUP_DETECTOR
-	smp_check_and_update_hardlockup();
-#endif /* CONFIG_SMP_HARDLOCKUP_DETECTOR */
 
 	/* kick the softlockup detector */
 	wake_up_process(__this_cpu_read(softlockup_watchdog));
@@ -463,19 +427,7 @@ static void watchdog_prepare_cpu(int cpu)
 {
 	struct hrtimer *hrtimer = &per_cpu(watchdog_hrtimer, cpu);
 
-#ifdef CONFIG_SMP_HARDLOCKUP_DETECTOR
-	unsigned long flags;
-
-	spin_lock_irqsave(&hardlockup_lock, flags);
-	/* update boot CPU's timestamp */
-	per_cpu(hardlockup_touch_ts, smp_processor_id()) = get_timestamp(0);
-
-	per_cpu(hardlockup_touch_ts, cpu) = get_timestamp(0);
-	spin_unlock_irqrestore(&hardlockup_lock, flags);
-#endif /* CONFIG_SMP_HARDLOCKUP_DETECTOR */
-
 	WARN_ON(per_cpu(softlockup_watchdog, cpu));
-
 	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	hrtimer->function = watchdog_timer_fn;
 }

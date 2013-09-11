@@ -27,7 +27,6 @@
 #include <linux/scatterlist.h>
 #include <linux/regulator/consumer.h>
 #include <linux/pm_runtime.h>
-#include <linux/wakelock.h>
 #include <linux/platform_data/pxa_sdhci.h>
 
 #include <linux/leds.h>
@@ -2409,12 +2408,6 @@ static void sdhci_tasklet_finish(unsigned long param)
 	mmc_request_done(host->mmc, mrq);
 	sdhci_runtime_pm_put(host);
 	sdhci_access_constrain(host, 0);
-
-	if (host->quirks2 & SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST) {
-		if (host->muti_trans_lock_en)
-			wake_lock_timeout(&host->muti_trans_lock,
-				host->muti_trans_timeout);
-	}
 }
 
 static void sdhci_timeout_timer(unsigned long data)
@@ -2813,16 +2806,6 @@ int sdhci_suspend_host(struct sdhci_host *host)
 {
 	int ret;
 
-	if (host->quirks2 & SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST) {
-		/*
-		* If  have entered suspend, do not hold suspend wakelock,
-		* or the system may has not chance to enter suspend for ever
-		*/
-		host->muti_trans_lock_en = 0;
-		if (wake_lock_active(&host->muti_trans_lock))
-			wake_unlock(&host->muti_trans_lock);
-	}
-
 	sdhci_runtime_pm_get(host);
 
 	if (host->ops->platform_suspend)
@@ -2860,14 +2843,6 @@ int sdhci_suspend_host(struct sdhci_host *host)
 	}
 
 	sdhci_runtime_pm_put(host);
-
-	if (ret && (host->quirks2 & SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST)) {
-		/*
-		* If  suspend fail, re enable the wakelock
-		*/
-		host->muti_trans_lock_en = 1;
-	}
-
 	return ret;
 }
 
@@ -2876,14 +2851,6 @@ EXPORT_SYMBOL_GPL(sdhci_suspend_host);
 int sdhci_resume_host(struct sdhci_host *host)
 {
 	int ret;
-
-	if (host->quirks2 & SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST) {
-		/*
-		 * if system start to resume, enable to hold suspend wakelock
-		 * for muti-blocks transfer again
-		 */
-		host->muti_trans_lock_en = 1;
-	}
 
 	sdhci_runtime_pm_get(host);
 
@@ -3484,13 +3451,6 @@ int sdhci_add_host(struct sdhci_host *host)
 		goto untasklet;
 	}
 
-	wake_lock_init(&host->muti_trans_lock, WAKE_LOCK_SUSPEND,
-			(const char *)mmc_hostname(host->mmc));
-	if (host->quirks2 & SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST) {
-		host->muti_trans_lock_en = 1;
-		host->muti_trans_timeout = 0.5*HZ; /* 0.5S by default */
-	}
-
 	sdhci_init(host, 0);
 
 #ifdef CONFIG_MMC_DEBUG
@@ -3597,7 +3557,6 @@ void sdhci_remove_host(struct sdhci_host *host, int dead)
 	host->adma_desc = NULL;
 	host->align_buffer = NULL;
 
-	wake_lock_destroy(&host->muti_trans_lock);
 	sdhci_runtime_pm_put(host);
 }
 

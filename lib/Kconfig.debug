@@ -211,15 +211,6 @@ config HARDLOCKUP_DETECTOR
 	def_bool LOCKUP_DETECTOR && PERF_EVENTS && HAVE_PERF_EVENTS_NMI && \
 		 !HAVE_NMI_WATCHDOG
 
-config SMP_HARDLOCKUP_DETECTOR
-	bool "Detect hard lockups on SMP systems"
-	depends on SMP
-	help
-	  Say Y to enable hard lockup detector on SMP systems without NMI.
-	  The SMP_HARDLOCKUP_DETECTOR can work only when there are two or
-	  more CPUs online (alive). If there is only one CPU, this detector
-	  will not work.
-
 config BOOTPARAM_HARDLOCKUP_PANIC
 	bool "Panic (Reboot) On Hard Lockups"
 	depends on LOCKUP_DETECTOR

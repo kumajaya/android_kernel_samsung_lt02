@@ -3268,27 +3268,6 @@ static ssize_t show_touchkey_threshold(struct device *dev,
 					cap->dummy_threshold, cap->key_threshold,
 					cap->dummy_threshold);
 }
-#if defined(CONFIG_MACH_LT02LGT)
-static ssize_t store_touchkey_dummy_threshold(struct device *dev,
-        struct device_attribute *attr, const char *buf, size_t size)
-{
-	u16 data;
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	struct i2c_client *client = info->client;
-	struct capa_info *cap = &(info->cap_info);
-	sscanf(buf, "%d\n", &data);
-	printk(KERN_DEBUG "%s,data = %d\n",__func__,data);
-	if (write_reg(info->client,
-			BT532_DUMMY_BUTTON_SENSITIVITY, data) != I2C_SUCCESS) {
-			printk(KERN_INFO "failed to set touchkey data %d.\n",
-				data);
-			return -1;
-	}
-	cap->dummy_threshold = data;
-	return data;
-}
-#endif
-
 static ssize_t enable_dummy_key(struct device *dev,
 								struct device_attribute *attr,
 								char *buf, size_t count)
@@ -3386,12 +3365,8 @@ static ssize_t show_menu_key_idac_data(struct device *dev,
 	return 0;
 }
 */
-#if defined(CONFIG_MACH_LT02LGT)
-static DEVICE_ATTR(touchkey_threshold, S_IRUGO | S_IWUSR | S_IWGRP, show_touchkey_threshold, store_touchkey_dummy_threshold);
-#else
-static DEVICE_ATTR(touchkey_threshold, S_IRUGO, show_touchkey_threshold, NULL);
-#endif
 
+static DEVICE_ATTR(touchkey_threshold, S_IRUGO, show_touchkey_threshold, NULL);
 /*static DEVICE_ATTR(touch_sensitivity, S_IRUGO, back_key_state_show, NULL);*/
 static DEVICE_ATTR(extra_button_event, S_IWUSR | S_IWGRP | S_IRUGO,
 					enable_dummy_key, enable_dummy_key);

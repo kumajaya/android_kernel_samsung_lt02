@@ -102,8 +102,6 @@ int mmp_gpio_edge_add(struct gpio_edge_desc *edge)
 	return 0;
 }
 
-EXPORT_SYMBOL(mmp_gpio_edge_add);
-
 /* Remove one gpio edge wakeup source from the list */
 int mmp_gpio_edge_del(struct gpio_edge_desc *edge)
 {
@@ -129,8 +127,6 @@ int mmp_gpio_edge_del(struct gpio_edge_desc *edge)
 	pr_err("error: gpio edge: del none exist gpio: %d\n", edge->gpio);
 	return -ENXIO;
 }
-
-EXPORT_SYMBOL(mmp_gpio_edge_del);
 
 /*
  * Enable each gpio edge wakeup source in the list, and enable the corresponing

@@ -60,7 +60,6 @@ obj-$(CONFIG_MACH_LT02)		+= board-lt02-pins.o board-lt02-battery.o board-lt02.o 
 							   board-lt02-regulators.o board-lt02-irled.o
 obj-$(CONFIG_MACH_COCOA7)	+= board-cocoa7-pins.o board-cocoa7-battery.o board-cocoa7.o samsung_camera_lt02.o sec-common.o \
 							   board-cocoa7-regulators.o
-obj-$(CONFIG_GPU_RESERVE_MEM)   += gpu_mem.o
 
 ifeq ($(CONFIG_HOTPLUG_CPU),y)
 obj-$(CONFIG_CPU_PXA988)        += pxa988_hotplug.o

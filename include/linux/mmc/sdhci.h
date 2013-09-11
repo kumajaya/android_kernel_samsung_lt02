@@ -96,8 +96,6 @@ struct sdhci_host {
 #define SDHCI_QUIRK2_PRESET_VALUE_BROKEN               	(1<<2)
 /* Controller data timeout counter is 4 times long as spec defined */
 #define SDHCI_QUIRK2_TIMEOUT_DIVIDE_4			(1<<3)
-/* After SD host request, prevent system to suspend state for a while */
-#define SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST	(1<<4)
 
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
@@ -179,24 +177,6 @@ struct sdhci_host {
 #define SDHCI_TUNING_MODE_1	0
 	struct timer_list	tuning_timer;	/* Timer for tuning */
 	int	constrain_ref;
-
-	/*
-	* A workaroud to improve the muti-blocks R/W performance
-	* Example:
-	* The user APP iperf doesn't claim system suspend lock in some case,
-	* so the system may enter to suspend state even iperf is running.
-	* And the iperf throughput test result would decrease.
-	*
-	* If R/W are called so frequently, we use this timeout wakelock to
-	* pervent suspend. But if the R/W stops for a while, the wakelock
-	* will be releaseed and system has chance to enter suspend.
-	*
-	* if the system want to support this feature,
-	* set "SDHCI_QUIRK_HOLDSUSPEND_AFTER_REQUEST" in the quirks2
-	*/
-	struct wake_lock muti_trans_lock;
-	int	muti_trans_lock_en;
-	int	muti_trans_timeout;
 
 	unsigned long private[0] ____cacheline_aligned;
 };

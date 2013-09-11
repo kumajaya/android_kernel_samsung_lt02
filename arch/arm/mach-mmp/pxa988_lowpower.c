@@ -660,22 +660,22 @@ int pxa988_enter_lowpower(u32 cpu, u32 power_mode)
 	 * CPU1 exits C2, which is not expected.
 	 */
 	icdispr = readl_relaxed(GIC_DIST_VIRT_BASE + GIC_DIST_PENDING_SET);
-	if (icdispr)
+	if (icdispr) {
+#ifdef CONFIG_LOCAL_TIMERS
+		/* switch back to normal timer after back from lpm */
+		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu_id);
+#endif
 		lpm_index = PXA988_LPM_C1;
 #endif
+	}
 	/*FIXME
 	 * Here the return state is not very accurate.
 	 * When Core1 enters C2 and Core0 excutes here,
 	 * Core1 would be woke up but it also return
 	 * C1 although it exits from C2.
 	 */
-	if (lpm_index == PXA988_LPM_C1) {
-#ifdef CONFIG_LOCAL_TIMERS
-		/* switch back to normal timer */
-		clockevents_notify(CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu_id);
-#endif
+	if (lpm_index == PXA988_LPM_C1)
 		return lpm_index;
-	}
 
 	/* if this flag is cleared, CPU1 is preparing to enter c2 */
 	if (cpu == 1)
@@ -722,7 +722,7 @@ int pxa988_enter_lowpower(u32 cpu, u32 power_mode)
 	trace_pxa_cpu_idle(LPM_EXIT(lpm_index), cpu);
 #else
 #ifdef CONFIG_CACHE_L2X0
-	//pl310_suspend();
+	pl310_suspend();
 #endif
 	cpu_cluster_pm_enter();
 

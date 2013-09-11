@@ -1668,7 +1668,6 @@ irqreturn_t pxa168_fb_isr(int id)
 {
 	struct pxa168fb_info *fbi;
 	struct regshadow *shadowreg;
-	struct pxa168fb_mach_info *mi;
 	int vid;
 	struct timespec vsync_time;
 
@@ -1678,7 +1677,6 @@ irqreturn_t pxa168_fb_isr(int id)
 		if (!fbi)
 			continue;
 
-		mi = fbi->dev->platform_data;
 		shadowreg = &fbi->shadowreg;
 		if (shadowreg && shadowreg->flags)
 			pxa168fb_set_regs(fbi, shadowreg);
@@ -1696,9 +1694,6 @@ irqreturn_t pxa168_fb_isr(int id)
 			wake_up(&gfx_info.fbi[0]->w_intr_wq);
 		}
 
-		if(mi->mmap < 3)
-			atomic_set(&fbi->vsync_cnt, 1);
-		else
 		atomic_set(&fbi->vsync_cnt, 2);
 
 		if (fbi->vsync_en) {

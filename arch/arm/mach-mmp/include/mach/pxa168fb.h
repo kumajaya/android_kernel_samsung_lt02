@@ -315,6 +315,7 @@ struct pxa168fb_mach_info {
 	unsigned int max_fb_size;
 	unsigned int xres_virtual;
 	/* recovery mode of system */
+	int recovery_mode;
 
 
 	/*
@@ -354,7 +355,7 @@ struct pxa168fb_mach_info {
 	unsigned	panel_rbswap:1;
 	unsigned	active:1;
 	unsigned	enable_lcd:1;
-	unsigned	mmap:2;
+	unsigned	mmap:1;
 
 	/*
 	 * dither option
@@ -593,8 +594,6 @@ extern struct fbi_info gfx_info;
 extern struct fbi_info ovly_info;
 #endif
 extern struct device_attribute dev_attr_misc;
-extern void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index, unsigned int panel);
-
 #ifdef CONFIG_PXA688_MISC
 extern int pxa688fb_vsmooth_set(int id, int vid, int en);
 extern int pxa688fb_partdisp_set(struct mvdisp_partdisp grap);

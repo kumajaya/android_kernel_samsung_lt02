@@ -50,13 +50,10 @@ EXPORT_SYMBOL(lpcharge);
 static struct s3c_adc_client *temp_adc_client;
 
 static sec_bat_adc_table_data_t lt02_temp_table[] = {
-        {64,  700},
-        {69,  670},
-        {82,  640},
         {87,  620},
         {93,  600},
         {97,  580},
-        {108, 550},
+        {108,  550},
         {123, 500},
         {146, 440},
         {157, 420},
@@ -336,28 +333,12 @@ static int sec_bat_check_cable_callback(void)
 	union power_supply_propval value;
 	struct power_supply *psy = power_supply_get_by_name("battery");
 	int ret;
-#if defined(CONFIG_MACH_LT02LGT)
-	int retry_cnt = 0;
-#endif
 
 	ta_nconnected = gpio_get_value(mfp_to_gpio(GPIO005_GPIO_5));
 
 	pr_info("%s : ta_nconnected : %d\n", __func__, ta_nconnected);
 
-#if defined(CONFIG_MACH_LT02LGT)
-	do {
-		msleep(300);
-
-		ta_nconnected = gpio_get_value(mfp_to_gpio(GPIO005_GPIO_5));
-		if (!(ta_nconnected && !attached_cable))
-			break;
-
-		pr_info("%s : ta_nconnected : %d (%d)\n",
-			__func__, ta_nconnected, retry_cnt);
-	} while(retry_cnt++ < 13);
-#else
 	msleep(300);
-#endif
 
 	if((attached_cable == CABLE_TYPE2_DESKDOCK_MUIC) ||
 	   (attached_cable == CABLE_TYPE3_DESKDOCK_VB_MUIC)) {
@@ -751,20 +732,6 @@ sec_battery_platform_data_t sec_battery_pdata = {
 		sizeof(lt02_temp_table)/sizeof(sec_bat_adc_table_data_t),
 
         .temp_check_count = 1,
-#if defined(CONFIG_MACH_LT02LGT)
-        .temp_high_threshold_event = 640,
-        .temp_high_recovery_event = 420,
-        .temp_low_threshold_event = -70,
-        .temp_low_recovery_event = 0,
-        .temp_high_threshold_normal = 640,
-        .temp_high_recovery_normal = 420,
-        .temp_low_threshold_normal = -70,
-        .temp_low_recovery_normal = 0,
-        .temp_high_threshold_lpm = 640,
-        .temp_high_recovery_lpm = 420,
-        .temp_low_threshold_lpm = -70,
-        .temp_low_recovery_lpm = 0,
-#else
         .temp_high_threshold_event = 600,
         .temp_high_recovery_event = 420,
         .temp_low_threshold_event = -50,
@@ -777,7 +744,6 @@ sec_battery_platform_data_t sec_battery_pdata = {
         .temp_high_recovery_lpm = 420,
         .temp_low_threshold_lpm = -50,
         .temp_low_recovery_lpm = 0,
-#endif
 
 	.full_check_type = SEC_BATTERY_FULLCHARGED_FG_CURRENT,
 	.full_check_type_2nd = SEC_BATTERY_FULLCHARGED_TIME,
@@ -818,11 +784,7 @@ sec_battery_platform_data_t sec_battery_pdata = {
 	.chg_polarity_status = 0,
 	.chg_irq_attr = IRQF_TRIGGER_RISING,
 
-#if defined(CONFIG_MACH_LT02LGT)
-	.chg_float_voltage = 4180,
-#else
 	.chg_float_voltage = 4200,
-#endif
 	.siop_activated = 0,
 	.siop_level = 0,
 };

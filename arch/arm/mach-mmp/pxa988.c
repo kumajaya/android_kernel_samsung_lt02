@@ -52,7 +52,6 @@
 #include <mach/reset-pxa988.h>
 #include <mach/pxa168fb.h>
 #include <plat/mfp.h>
-#include <mach/gpu_mem.h>
 
 #include "common.h"
 
@@ -355,6 +354,8 @@ static struct ion_platform_data ion_data = {
 			.type	= ION_HEAP_TYPE_CARVEOUT,
 			.id	= ION_HEAP_TYPE_CARVEOUT,
 			.name	= "carveout_heap",
+			.size	= SZ_128M,
+			.base	= 0x09000000,
 		},
 		[1] = {
 			.type	= ION_HEAP_TYPE_SYSTEM,
@@ -372,32 +373,18 @@ struct platform_device device_ion = {
 	},
 };
 
-static int __init ion_mem_carveout(char *p)
+static void __init pxa988_ion_reserve(void)
 {
-	struct ion_platform_data *ip = &ion_data;
-	unsigned long size;
-	phys_addr_t start;
-	char *endp;
+	/* reserve memory for ION */
+	struct ion_platform_data *p = &ion_data;
 	int i;
 
-	size  = memparse(p, &endp);
-	if (*endp == '@')
-		start = memparse(endp + 1, NULL);
-	else
-		BUG_ON(1);
+	for (i = 0; i < p->nr; i++) {
+		BUG_ON(memblock_reserve(p->heaps[i].base, p->heaps[i].size));
+	}
 
-	pr_info("ION carveout memory: 0x%08lx@0x%08lx\n",
-		size, (unsigned long)start);
-	/* set the carveout heap range */
-	ion_data.heaps[0].size = size;
-	ion_data.heaps[0].base = start;
-
-	for (i = 0; i < ip->nr; i++)
-		BUG_ON(memblock_reserve(ip->heaps[i].base, ip->heaps[i].size));
-
-	return 0;
+	return;
 }
-early_param("ioncarv", ion_mem_carveout);
 #endif
 
 /* CP memeory reservation, 32MB by default */
@@ -461,13 +448,13 @@ void __init pxa988_reserve(void)
 	pxa988_reserve_obmmem();
 
 	pxa988_reserve_cpmem();
-
+#ifdef CONFIG_ION
+	pxa988_ion_reserve();
+#endif
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	pxa988_ram_console_init();
 #endif
-#ifdef CONFIG_GPU_RESERVE_MEM
-	pxa_reserve_gpu_memblock();
-#endif
+
 	pxa988_reserve_pmmem();
 	pxa988_reserve_fb_mem();
 }
@@ -811,9 +798,6 @@ static int __init pxa988_init(void)
 	pxa_init_dma(IRQ_PXA988_DMA_INT0, 32);
 #ifdef CONFIG_ION
 	platform_device_register(&device_ion);
-#endif
-#ifdef CONFIG_GPU_RESERVE_MEM
-	pxa_add_gpu();
 #endif
 	platform_device_register(&pxa988_device_gpio);
 #if defined(CONFIG_TOUCHSCREEN_VNC)

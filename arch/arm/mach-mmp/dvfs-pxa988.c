@@ -174,7 +174,7 @@ static int vm_millivolts_988ax_svc[PROFILE_NUM][VL_MAX] = {
 static int vm_millivolts_986ax_svc[PROFILE_NUM][VL_MAX] = {
 	/* PP <= 312, PP<=624, PP<=1066, PP<=1205 */
 	{1050, 1138, 1275, 1350},	/* profile 0 */
-	{1050, 1100, 1100, 1200},	/* profile 1 */
+	{1050, 1100, 1100, 1188},	/* profile 1 */
 	{1050, 1100, 1113, 1200},	/* profile 2 */
 	{1050, 1100, 1138, 1213},	/* profile 3 */
 	{1050, 1100, 1150, 1238},	/* profile 4 */

@@ -2287,15 +2287,9 @@ static int sr200pc20m_set_preview_status(struct i2c_client *client, int value)
 			sr200pc20m_WRT_LIST(client,sr352_Init_Reg);
 
 			// Change 720P -> Other record size needs to reconfigure camera setting
-			if(sensor->ev != EV_DEFAULT){
-				sr200pc20m_q_brightness(client, sensor->ev);
-			}
-			if(sensor->effect != EFFECT_OFF){
-				sr200pc20m_t_effect(client, sensor->effect);
-			}
-			if(sensor->wb != WB_AUTO){
-				sr200pc20m_t_whitebalance(client, sensor->wb);
-			}
+			sr200pc20m_q_brightness(client, sensor->ev);
+			sr200pc20m_t_effect(client, sensor->effect);
+			sr200pc20m_t_whitebalance(client, sensor->wb);
 		}
 		sr200pc20m_cam_state = SR200PC20M_STATE_CAMCORDER;
 	}
@@ -2478,15 +2472,10 @@ int sr200pc20m_streamon(struct i2c_client *client)
 			sr200pc20m_WRT_LIST(client,sr352_recording_50Hz_HD);
 
 			// Change Other -> 720P record size needs to reconfigure camera setting
-			if(sensor->ev != EV_DEFAULT){
-				sr200pc20m_q_brightness(client, sensor->ev);
-			}
-			if(sensor->effect != EFFECT_OFF){
-				sr200pc20m_t_effect(client, sensor->effect);
-			}
-			if(sensor->wb != WB_AUTO){
-				sr200pc20m_t_whitebalance(client, sensor->wb);
-			}
+			sr200pc20m_q_brightness(client, sensor->ev);
+			sr200pc20m_t_effect(client, sensor->effect);
+			sr200pc20m_t_whitebalance(client, sensor->wb);
+
 		}
 		else if(sensor->record_width == 720 && sensor->record_height == 480){
 			Cam_Printk(KERN_NOTICE "720x480 Camcorder: set stream-on setting\n");

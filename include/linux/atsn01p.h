@@ -14,11 +14,11 @@
  *  GNU General Public License for more details.
  */
 
-#ifndef __ASP01_GRIP_HEADER__
-#define __ASP01_GRIP_HEADER__
+#ifndef __ATSN01P_GRIP_HEADER__
+#define __ATSN01P_GRIP_HEADER__
 
 /* order of init code */
-enum ASP01_INIT_CODE {
+enum ATSN01P_INIT_CODE {
 	SET_UNLOCK = 0,
 	SET_RST_ERR,
 	SET_PROX_PER,
@@ -50,10 +50,9 @@ enum ASP01_INIT_CODE {
 	SET_REG_NUM,
 };
 
-struct asp01_platform_data {
+struct atsn10p_platform_data {
 	int t_out; /* touch int pin output */
 	int adj_det; /* test jig detect pin */
-	int irq;
 	int cr_divsr;
 	int cr_divnd;
 	int cs_divsr;

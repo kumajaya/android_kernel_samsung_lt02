@@ -195,8 +195,6 @@ static int sr130pc10_copy_files_for_60hz(void){
 	COPY_FROM_60HZ_TABLE (sr130pc10_fps_15fix, 60hz);
 	COPY_FROM_60HZ_TABLE (sr130pc10_fps_15fix_352X288, 60hz);
 	COPY_FROM_60HZ_TABLE (sr130pc10_fps_15fix_176X144, 60hz);
-	COPY_FROM_60HZ_TABLE (sr130pc10_fps_8fix_352X288, 60hz);
-	COPY_FROM_60HZ_TABLE (sr130pc10_fps_8fix_176X144, 60hz);
 
 	printk("%s: copy done!\n", __func__);
 }
@@ -213,9 +211,7 @@ static int sr130pc10_check_table_size_for_60hz(void){
 	if ( !IS_SAME_NUM_OF_ROWS(sr130pc10_fps_15fix) ) return (-6);
 	if ( !IS_SAME_NUM_OF_ROWS(sr130pc10_fps_15fix_352X288) ) return (-7);
 	if ( !IS_SAME_NUM_OF_ROWS(sr130pc10_fps_15fix_176X144) ) return (-8);
-	if ( !IS_SAME_NUM_OF_ROWS(sr130pc10_fps_8fix_352X288) ) return (-9);		
-	if ( !IS_SAME_NUM_OF_ROWS(sr130pc10_fps_8fix_176X144) ) return (-10);
-		
+
 	printk("%s: Success !\n", __func__);
 	return 0;
 }
