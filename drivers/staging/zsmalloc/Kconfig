@@ -1,9 +1,9 @@
 config ZSMALLOC
 	tristate "Memory allocator for compressed pages"
-	# X86 dependency is because of the use of __flush_tlb_one and set_pte
+	# arch dependency is because of the use of local_unmap_kernel_range
 	# in zsmalloc-main.c.
-	# TODO: convert these to portable functions
-	depends on X86
+	# TODO: implement local_unmap_kernel_range in all architecture.
+	depends on (ARM || MIPS || SUPERH)
 	default n
 	help
 	  zsmalloc is a slab-based memory allocator designed to store

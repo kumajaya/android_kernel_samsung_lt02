@@ -1,8 +1,8 @@
 config ZCACHE
 	bool "Dynamic compression of swap pages and clean pagecache pages"
-	# X86 dependency is because zsmalloc uses non-portable pte/tlb
+	# arch dependency is because of the use of local_unmap_kernel_range
 	# functions
-	depends on (CLEANCACHE || FRONTSWAP) && CRYPTO=y && X86
+	depends on (CLEANCACHE || FRONTSWAP) && CRYPTO=y && (ARM || MIPS || SUPERH)
 	select ZSMALLOC
 	select CRYPTO_LZO
 	default n
