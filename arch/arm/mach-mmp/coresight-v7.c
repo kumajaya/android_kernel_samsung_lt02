@@ -13,12 +13,14 @@
 #include <linux/cpu.h>
 #include <linux/smp.h>
 #include <linux/init.h>
+#include <linux/delay.h>
 #include <linux/percpu.h>
 #include <linux/cpu_pm.h>
 #include <linux/notifier.h>
 
 #include <asm/io.h>
 
+#include <mach/regs-apmu.h>
 #include <mach/regs-coresight.h>
 
 #ifdef CONFIG_CPU_PXA988
@@ -52,6 +54,83 @@ static DEFINE_PER_CPU(struct cti_info, cpu_cti_info);
 static DEFINE_PER_CPU(struct ptm_info, cpu_ptm_info);
 
 static struct coresight_info cst_info;
+
+
+void coresight_panic_locked_cpu(int cpu) {
+	unsigned int val, timeout = 10000;
+	u32 regval;
+	int i;
+
+	printk("Will change PC of cpu%d to 0 to trigger panic\n", cpu);
+
+	/* Enable trace/debug clock */
+	regval = readl(APMU_TRACE);
+	regval |= ((1 << 3) | (1 << 4) | (1 << 16));
+	writel(regval, APMU_TRACE);
+
+	printk("Please take below PCSR values as reference\n");
+	for (i = 0; i < 8; i++) {
+		val = readl(DBG_PCSR(cpu));
+		printk(KERN_EMERG "PCSR of cpu %d is 0x%x\n", cpu, val);
+		udelay(10);
+	}
+
+	/* Unlock debug register access */
+	writel(0xC5ACCE55, DBG_LAR(cpu));
+
+	/* Enable Halt Debug and Instruction Transfer */
+	val = readl(DBG_DSCR(cpu));
+	val |= (0x1 << 14) | (0x1 << 13);
+	writel(val, DBG_DSCR(cpu));
+
+	/* Halt the dest cpu */
+	writel(0x1, DBG_DRCR(cpu));
+
+	/* Wait the cpu halted */
+	do {
+		val = readl(DBG_DSCR(cpu));
+		if (val & 0x1)
+			break;
+	} while (timeout--);
+
+	if (!timeout) {
+		printk(KERN_EMERG "Cannot stop cpu%d\n", cpu);
+		return;
+	}
+
+	/* Issue an instruction to change the PC of dest cpu to 0 */
+	writel(0xE3A0F000, DBG_ITR(cpu));
+
+	/* Wait until the instruction complete */
+	timeout = 10000;
+	do {
+		val = readl(DBG_DSCR(cpu));
+		if (val & (0x1 << 24))
+			break;
+	} while (timeout--);
+
+	if (!timeout)
+		printk(KERN_EMERG "Cannot execute instructions on cpu%d\n", cpu);
+
+	val = readl(DBG_DSCR(cpu));
+	val &= ~((0x1 << 14) | (0x1 << 13));
+	writel(val, DBG_DSCR(cpu));
+
+	/* Restart dest cpu */
+	printk(KERN_EMERG "Going to restart cpu%d\n", cpu);
+	writel(0x2, DBG_DRCR(cpu));
+
+	timeout = 10000;
+	do {
+		val = readl(DBG_DSCR(cpu));
+		if (val & (0x1 << 1))
+			break;
+	} while (timeout--);
+
+	if (!timeout)
+		printk(KERN_EMERG "Cannot restart cpu%d\n", cpu);
+}
+
 
 #ifdef CONFIG_CPU_PXA988
 /* The following operations are needed by Pixiu */

@@ -1251,7 +1251,7 @@ static struct i2c_gpio_platform_data i2c_pn547_data = {
 
 static struct platform_device i2c_nfc_device = {
 	.name	= "i2c-gpio",
-	.id	= 8,
+	.id	= 9,
 	.dev	= {
 		.platform_data	= &i2c_pn547_data,
 	},
@@ -1340,22 +1340,22 @@ static int grip_gpio_init(void)
 static void grip_init_code_set(void)
 {
 	asp01_pdata.cr_divsr = 10;
-	asp01_pdata.cr_divnd = 12;
+	asp01_pdata.cr_divnd = 13;
 	asp01_pdata.cs_divsr = 10;
-	asp01_pdata.cs_divnd = 12;
-	
+	asp01_pdata.cs_divnd = 13;
+
 	asp01_pdata.init_code[SET_UNLOCK] =	0x5a;
 	asp01_pdata.init_code[SET_RST_ERR] =	0x33;
 	asp01_pdata.init_code[SET_PROX_PER] =	0x34;
 	asp01_pdata.init_code[SET_PAR_PER] =	0x34;
 	asp01_pdata.init_code[SET_TOUCH_PER] =	0x3c;
-	asp01_pdata.init_code[SET_HI_CAL_PER] =	0x08;
+	asp01_pdata.init_code[SET_HI_CAL_PER] =	0x18;
 	asp01_pdata.init_code[SET_BSMFM_SET] =	0x31;
 	asp01_pdata.init_code[SET_ERR_MFM_CYC] =0x33;
 	asp01_pdata.init_code[SET_TOUCH_MFM_CYC] =0x25;
 	asp01_pdata.init_code[SET_HI_CAL_SPD] =	0x19;
 	asp01_pdata.init_code[SET_CAL_SPD] =	0x03;
-	asp01_pdata.init_code[SET_INIT_REF] =	0x00;
+	/* asp01_pdata.init_code[SET_INIT_REF] = 0x00; */
 	asp01_pdata.init_code[SET_BFT_MOT] =	0x40;
 	asp01_pdata.init_code[SET_TOU_RF_EXT] =	0x00;
 	asp01_pdata.init_code[SET_SYS_FUNC] =	0x10;
@@ -1369,7 +1369,7 @@ static void grip_init_code_set(void)
 	asp01_pdata.init_code[SET_HW_CON5] =	0x83;
 	asp01_pdata.init_code[SET_HW_CON6] =	0x3f;
 	asp01_pdata.init_code[SET_HW_CON7] =	0x48;
-	asp01_pdata.init_code[SET_HW_CON8] =	0x20;
+	/* asp01_pdata.init_code[SET_HW_CON8] =	0x20; */
 	asp01_pdata.init_code[SET_HW_CON10] =	0x27;
 	asp01_pdata.init_code[SET_HW_CON11] =	0x00;
 }
@@ -2078,6 +2078,7 @@ static struct sdhci_pxa_platdata pxa988_sdh_platdata_mmc2 = {
 				| PXA_FLAG_DISABLE_PROBE_CDSCAN,
 	.cd_type         = PXA_SDHCI_CD_EXTERNAL,
 	.pm_caps	= MMC_PM_KEEP_POWER,
+	.quirks2	= SDHCI_QUIRK2_HOLDSUSPEND_AFTER_REQUEST,
 	.dtr_data	= sdio_dtr_data,
 };
 
@@ -2463,7 +2464,7 @@ static void __init pxa988_init_device_ddrdevfreq(void)
 
 #if defined(CONFIG_SEC_THERMISTOR)
 #if defined(CONFIG_MACH_LT02LGT)
-static int siop_table[] = {420, 440, 460, 520, 540};
+static int siop_table[] = {390, 410, 430, 600, 650};
 #else
 static int siop_table[] = {400, 420, 440, 600, 650};
 #endif
@@ -2906,7 +2907,7 @@ static struct work_struct uart_wakeup_work;
 
 static void uart_add_constraint(int mfp, void *unused)
 {
-	if (!mod_timer(&uart_constraint_timer, jiffies + 3 * HZ))
+	if (!mod_timer(&uart_constraint_timer, jiffies + 10 * HZ))
 		pm_qos_update_request(&uart_lpm_cons,
 			PM_QOS_CPUIDLE_BLOCK_AXI_VALUE);
 	/* Refer to wlan_edge_wakeup() for why using work_queue here. */
@@ -2921,7 +2922,7 @@ static void uart_timer_handler(unsigned long data)
 
 static void uart_wakeup(struct work_struct *work)
 {
-	__pm_wakeup_event(&uart_ws, 3000); /* time in milliseconds */
+	__pm_wakeup_event(&uart_ws, 10000); /* time in milliseconds */
 }
 
 struct gpio_edge_desc uart_rx_pad = {
@@ -3167,7 +3168,7 @@ static void __init emeidkb_init(void)
 #ifdef CONFIG_NFC_PN547
 	pn547_gpio_init();
 	platform_device_register(&i2c_nfc_device);
-	i = i2c_register_board_info(8, ARRAY_AND_SIZE(pn547_i2c));
+	i = i2c_register_board_info(9, ARRAY_AND_SIZE(pn547_i2c));
 	if (i < 0) {
 		pr_err("%s, pn547_i2c adding i2c fail(err=%d)\n", __func__, i);
 	}

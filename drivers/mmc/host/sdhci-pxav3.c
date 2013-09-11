@@ -387,6 +387,9 @@ static int __devinit sdhci_pxav3_probe(struct platform_device *pdev)
 		| SDHCI_QUIRK_NO_ENDATTR_IN_NOPDESC
 		| SDHCI_QUIRK_32BIT_ADMA_SIZE
 		| SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN;
+	host->quirks2 = SDHCI_QUIRK2_NO_CURRENT_LIMIT
+		| SDHCI_QUIRK2_PRESET_VALUE_BROKEN
+		| SDHCI_QUIRK2_TIMEOUT_DIVIDE_4;
 
 	match = of_match_device(of_match_ptr(sdhci_pxav3_of_match), &pdev->dev);
 	if (match)
@@ -409,6 +412,8 @@ static int __devinit sdhci_pxav3_probe(struct platform_device *pdev)
 
 		if (pdata->quirks)
 			host->quirks |= pdata->quirks;
+		if (pdata->quirks2)
+			host->quirks2 |= pdata->quirks2;
 		if (pdata->host_caps)
 			host->mmc->caps |= pdata->host_caps;
 		if (pdata->host_caps2)
@@ -433,9 +438,6 @@ static int __devinit sdhci_pxav3_probe(struct platform_device *pdev)
 		} else if (pdata->cd_type == PXA_SDHCI_CD_NONE)
 			host->mmc->caps |= MMC_CAP_NEEDS_POLL;
 	}
-	host->quirks2 = SDHCI_QUIRK2_NO_CURRENT_LIMIT
-		| SDHCI_QUIRK2_PRESET_VALUE_BROKEN
-		| SDHCI_QUIRK2_TIMEOUT_DIVIDE_4;
 	host->ops = &pxav3_sdhci_ops;
 
 	if (pdata && pdata->flags & PXA_FLAG_EN_PM_RUNTIME) {

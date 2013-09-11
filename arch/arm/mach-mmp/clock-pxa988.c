@@ -378,7 +378,7 @@ static unsigned int __get_pll2_freq(unsigned int *pll2_freq,
 
 	if (pll2refd == 0)
 		pll2refd = 1;
-	pll2_vco = 26 * pll2cr.b.pll2fbd / pll2refd;
+	pll2_vco = DIV_ROUND_UP(26 * pll2cr.b.pll2fbd, pll2refd);
 
 	pll2_sw_ctl.v = __raw_readl(APB_SPARE_PLL2CR);
 	pll2_div = __pll_divsel2div(pll2_sw_ctl.b.divselse);
@@ -397,13 +397,22 @@ static unsigned int __get_pll2_freq(unsigned int *pll2_freq,
 static void clk_pll2_vco_init(struct clk *clk)
 {
 	unsigned int pll2, pll2p, pll2vco;
+	unsigned int pll2_rngl, pll2_rngh, tmp;
 
 	BUG_ON(!pll2_vco_default);
 	clk->rate = pll2_vco_default;
 	if (__pll2_is_enabled()) {
 		pll2vco = __get_pll2_freq(&pll2, &pll2p);
-		pr_info("PLL2_VCO is already enabled @ %lu\n",
-			pll2vco * MHZ);
+		pr_info("PLL2_VCO is already enabled @ %lu, Expected @ %lu\n",
+			pll2vco * MHZ, pll2_vco_default);
+		/* check whether pll2 is in the range of 2% our expectation */
+		tmp = pll2_vco_default / MHZ;
+		if (tmp != pll2vco) {
+			pll2_rngh = tmp + tmp * 2 / 100;
+			pll2_rngl = tmp - tmp * 2 / 100;
+			BUG_ON(!((pll2_rngl <= pll2vco) && \
+				(pll2vco <= pll2_rngh)));
+		}
 		return;
 	}
 	pr_info("PLL2 VCO default rate %lu\n", clk->rate);
@@ -3305,8 +3314,13 @@ static struct clk pxa988_list_clks[] = {
 		APBC_PXA988_GPIO, 0, 13000000, NULL),
 	APBC_CLK("ssp0", "pxa988-ssp.0", NULL,
 		APBC_PXA988_SSP0, 4, 3250000, NULL),
+#ifdef CONFIG_ISDBT
+	APBC_CLK("ssp2", "pxa988-ssp.2", NULL,
+		APBC_PXA988_SSP2, 1, 13000000, NULL),
+#else
 	APBC_CLK("ssp2", "pxa988-ssp.2", NULL,
 		APBC_PXA988_SSP2, 2, 26000000, NULL),
+#endif		
 	APBC_CLK("keypad", "pxa27x-keypad", NULL,
 		APBC_PXA988_KPC, 0, 32000, NULL),
 	APBC_CLK("rtc", "sa1100-rtc", NULL,

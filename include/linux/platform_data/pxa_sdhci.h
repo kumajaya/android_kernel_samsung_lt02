@@ -97,6 +97,7 @@ struct sdhci_pxa_platdata {
 	unsigned int	host_caps2;
 	unsigned int    host_caps_disable;
 	unsigned int	quirks;
+	unsigned int	quirks2;
 	unsigned int	pm_caps;
 	void	(*signal_vol_change)(unsigned int set);
 	void (*clear_wakeup_event)(void);

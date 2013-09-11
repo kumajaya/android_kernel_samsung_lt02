@@ -21,6 +21,7 @@
 #define CTI_SOC_VIRT_BASE	(CORESIGHT_VIRT_BASE + 0x6000)
 #define TPIU_VIRT_BASE		(CORESIGHT_VIRT_BASE + 0x8000)
 #define CSTF_VIRT_BASE		(CORESIGHT_VIRT_BASE + 0x9000)
+#define DBG_CORE0_VIRT_BASE	(CORESIGHT_VIRT_BASE + 0x10000)
 #define CTI_CORE0_VIRT_BASE	(CORESIGHT_VIRT_BASE + 0x18000)
 #define CTI_CORE1_VIRT_BASE	(CORESIGHT_VIRT_BASE + 0x19000)
 #define PTM_CORE0_VIRT_BASE	(CORESIGHT_VIRT_BASE + 0x1C000)
@@ -44,6 +45,17 @@
 #define CSTF_LOCK		CSTF_REG(0xFB0)
 #define PTM_LOCK		PTM_REG(0xFB0)
 #define CTI_LOCK		CTI_REG(0xFB0)
+
+#define DBG_REG(cpu, addr)	(DBG_CORE0_VIRT_BASE + cpu * 0x2000 + addr)
+
+#define DBG_ID(cpu)		DBG_REG(cpu, 0x0)
+#define DBG_DTRRX(cpu)		DBG_REG(cpu, 0x80)
+#define DBG_ITR(cpu)		DBG_REG(cpu, 0x84)      /* Write only */
+#define DBG_PCSR(cpu)		DBG_REG(cpu, 0x84)      /* Read only */
+#define DBG_DSCR(cpu)		DBG_REG(cpu, 0x88)
+#define DBG_DTRTX(cpu)		DBG_REG(cpu, 0x8C)
+#define DBG_DRCR(cpu)		DBG_REG(cpu, 0x90)
+#define DBG_LAR(cpu)		DBG_REG(cpu, 0xFB0)
 
 #define CTI_EN_MASK		0x0F
 #define CTI_CTRL_OFFSET		0x0
@@ -69,9 +81,11 @@
 #ifdef CONFIG_CORESIGHT_SUPPORT
 extern void v7_coresight_save(void);
 extern void v7_coresight_restore(void);
+extern void coresight_panic_locked_cpu(int cpu);
 #else
 #define v7_coresight_save(void)		do {} while (0)
 #define v7_coresight_restore(void)	do {} while (0)
+#define coresight_panic_locked_cpu(int cpu)    do {} while (0)
 #endif
 
 #endif /* __ASM_MACH_CORSIGHT_H */
