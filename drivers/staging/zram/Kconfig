@@ -1,8 +1,9 @@
 config ZRAM
 	tristate "Compressed RAM block device support"
-	# X86 dependency is because zsmalloc uses non-portable pte/tlb
-	# functions
-	depends on BLOCK && SYSFS && X86
+	# arch dependency is because of the use of local_unmap_kernel_range
+	# in zsmalloc-main.c.
+	# TODO: implement local_unmap_kernel_range in all architecture.
+	depends on BLOCK && SYSFS && (ARM || MIPS || SUPERH)
 	select ZSMALLOC
 	select LZO_COMPRESS
 	select LZO_DECOMPRESS
