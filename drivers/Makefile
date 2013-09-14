@@ -139,5 +139,5 @@ obj-$(CONFIG_HYPERV)		+= hv/
 obj-$(CONFIG_PM_DEVFREQ)	+= devfreq/
 obj-$(CONFIG_NEW_SENSORS)       += sensors/
 ifeq (1, $(shell if [ -d $(srctree)/drivers/exfat ]; then echo 1; fi))
-obj-$(CONFIG_SAMSUNG_EXFAT)	+= exfat/
+obj-y	+= exfat/
 endif

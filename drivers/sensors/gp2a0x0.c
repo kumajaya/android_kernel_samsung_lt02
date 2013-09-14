@@ -231,26 +231,6 @@ int lightsensor_get_adc(struct gp2a_data *data)
 	D1_raw_data = (get_data[3] << 8) | get_data[2];	/* IR */
 
 	if (data->pdata->version) {  /* GP2AP 030 */
-#ifdef CONFIG_WIFIONLY_BOARD /*LT02 WIFI */
-		if (100 * D1_raw_data <= 40 * D0_raw_data) {
-			light_alpha = 861;
-			light_beta = 0;
-		} else if (100 * D1_raw_data <= 62 * D0_raw_data) {
-			light_alpha = 2668;
-			light_beta = 4027;
-		} else if (100 * D1_raw_data <= d0_boundary * D0_raw_data) {
-			if( (D0_raw_data < 3000) && (data->lightsensor_mode == 0 ) ) {
-				light_alpha = 292;
-				light_beta = 316;
-			} else {  /* Incandescent High lux */
-				light_alpha = 998;
-				light_beta = 1096;
-			}
-		} else {
-			light_alpha = 0;
-			light_beta = 0;
-		}
-#else /* LT02 3G */
 		if (100 * D1_raw_data <= 40 * D0_raw_data) {
 			light_alpha = 861;
 			light_beta = 0;
@@ -269,7 +249,6 @@ int lightsensor_get_adc(struct gp2a_data *data)
 			light_alpha = 0;
 			light_beta = 0;
 		}
-#endif
 	} else {   /* GP2AP 020 */
 		if (data->lightsensor_mode) {	/* HIGH_MODE */
 			if (100 * D1_raw_data <= 32 * D0_raw_data) {
