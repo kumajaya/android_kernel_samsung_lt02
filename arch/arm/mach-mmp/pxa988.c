@@ -372,19 +372,22 @@ struct platform_device device_ion = {
 	},
 };
 
-static int __init ion_mem_carveout(char *p)
+static void __init ion_mem_carveout(void)
 {
 	struct ion_platform_data *ip = &ion_data;
 	unsigned long size;
 	phys_addr_t start;
-	char *endp;
+	/* char *endp; */
 	int i;
 
-	size  = memparse(p, &endp);
+	/* size  = memparse(p, &endp);
 	if (*endp == '@')
 		start = memparse(endp + 1, NULL);
 	else
-		BUG_ON(1);
+		BUG_ON(1); */
+
+	size = SZ_128M;
+	start = 0x09000000;
 
 	pr_info("ION carveout memory: 0x%08lx@0x%08lx\n",
 		size, (unsigned long)start);
@@ -395,9 +398,9 @@ static int __init ion_mem_carveout(char *p)
 	for (i = 0; i < ip->nr; i++)
 		BUG_ON(memblock_reserve(ip->heaps[i].base, ip->heaps[i].size));
 
-	return 0;
+	return;
 }
-early_param("ioncarv", ion_mem_carveout);
+/* early_param("ioncarv", ion_mem_carveout); */
 #endif
 
 /* CP memeory reservation, 32MB by default */
@@ -461,7 +464,9 @@ void __init pxa988_reserve(void)
 	pxa988_reserve_obmmem();
 
 	pxa988_reserve_cpmem();
-
+#ifdef CONFIG_ION
+	ion_mem_carveout();
+#endif
 #ifdef CONFIG_ANDROID_RAM_CONSOLE
 	pxa988_ram_console_init();
 #endif
