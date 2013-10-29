@@ -1902,6 +1902,118 @@ static ssize_t itc_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR(itc, S_IRUGO | S_IWUSR, itc_show, itc_store);
 
+void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigned int panel)
+{
+	struct fb_info *info = fbi->fb_info;
+	struct fb_var_screeninfo *var = &(fbi->fb_info->var);
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+
+	if (panel == 0 || panel == 2) /*BOE / CPT*/ {
+
+		switch(index) {
+
+		case 0: /*48.19M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 125;
+			mi->modes->right_margin = 150;
+			mi->modes->vsync_len  =  3;
+			mi->modes->upper_margin  =  28;
+			mi->modes->lower_margin  =  28;
+			break;
+
+		case 1:	/*50.98M*/
+			mi->modes->hsync_len  =  23;
+			mi->modes->left_margin = 130;
+			mi->modes->right_margin = 188;
+			mi->modes->vsync_len  =  3;
+			mi->modes->upper_margin  =  15;
+			mi->modes->lower_margin  =  15;
+			break;
+
+		case 2: /*50.18M*/
+			mi->modes->hsync_len  =  18;
+			mi->modes->left_margin = 130;
+			mi->modes->right_margin = 192;
+			mi->modes->vsync_len  =  3;
+			mi->modes->upper_margin  =  16;
+			mi->modes->lower_margin  =  16;
+			break;
+
+		case 3: /*54.00M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 156;
+			mi->modes->right_margin = 150;
+			mi->modes->vsync_len  =  3;
+			mi->modes->upper_margin  =  20;
+			mi->modes->lower_margin  =  20;
+
+		default:
+
+			break;
+		}
+	} else if ( panel == 4) /* SDCVE */ {
+		/*VE_GROUP*/
+		switch(index) {
+
+		case 0: /*48.19M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 110;
+			mi->modes->right_margin = 150;
+			mi->modes->vsync_len  =  4;
+			mi->modes->upper_margin  =  7;
+			mi->modes->lower_margin  =  7;
+			break;
+
+		case 1:	/*50.98M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 134;
+			mi->modes->right_margin = 200;
+			mi->modes->vsync_len  =  4;
+			mi->modes->upper_margin  =  7;
+			mi->modes->lower_margin  =  7;
+			break;
+
+		case 2: /*50.18M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 110;
+			mi->modes->right_margin = 200;
+			mi->modes->vsync_len  =  4;
+			mi->modes->upper_margin  =  7;
+			mi->modes->lower_margin  =  7;
+			break;
+
+		case 3: /*54.00M*/
+			mi->modes->hsync_len  =  16;
+			mi->modes->left_margin = 110;
+			mi->modes->right_margin = 159;
+			mi->modes->vsync_len  =  4;
+			mi->modes->upper_margin  =  7;
+			mi->modes->lower_margin  =  7;
+			break;
+		default:
+
+			break;
+		}
+	} else {
+			mi->modes->hsync_len  =  20;
+			mi->modes->left_margin = 150;
+			mi->modes->right_margin = 150;
+			mi->modes->vsync_len  =  3;
+			mi->modes->upper_margin  =  15;
+			mi->modes->lower_margin  =  15;
+	}
+
+	set_mode(fbi, var, mi->modes, mi->pix_fmt, mi->mmap);
+
+	fb_videomode_to_modelist(mi->modes, mi->num_modes, &info->modelist);
+
+	/* init video mode data */
+	pxa168fb_init_mode(info, mi);
+
+	pxa168fb_set_par(info);
+
+}
+
 static int __devinit pxa168fb_probe(struct platform_device *pdev)
 {
 	struct pxa168fb_mach_info *mi;

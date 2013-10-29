@@ -20,6 +20,12 @@
 #include <asm/cacheflush.h>
 #include <asm/setup.h>
 
+#if defined(CONFIG_MACH_LT02)
+#include <mach/mfp-pxa986-lt02.h>
+#endif
+
+extern unsigned int sec_debug_mode;
+
 /* Raw i2c operations __ONLY__ can be used for reboot routine */
 #if defined(CONFIG_CPU_MMP2) || defined(CONFIG_CPU_MMP3)	\
 		|| defined(CONFIG_CPU_PXA910) || defined(CONFIG_CPU_PXA988)
@@ -410,16 +416,21 @@ void mmp_arch_reset(char mode, const char *cmd)
 	unsigned char data;
 	
 #ifdef CONFIG_KERNEL_DEBUG_SEC
-   if (cmd && !strcmp(cmd,"panic"))
-   {
-	u32 arsr_reg;
-	arsr_reg = readl(MPMU_ARSR);
-	arsr_reg &= MPMU_ARSR_SWR_MASK; // masking SWR
-	if (panic_reason && !strcmp(panic_reason, "__forced_upload"))
-	      writel(arsr_reg | RESET_FORCE_UPLOAD, MPMU_ARSR) ; // Intended panic for force upload.
-	else
-	      writel(arsr_reg | RESET_PANIC, MPMU_ARSR) ; // Real Panic
-  }
+	if (cmd && !strcmp(cmd,"panic")) {
+#if defined(CONFIG_MACH_LT02)
+		if (sec_debug_mode == DEBUG_LEVEL_MID || sec_debug_mode == DEBUG_LEVEL_HIGH) {
+#endif
+			u32 arsr_reg;
+			arsr_reg = readl(MPMU_ARSR);
+			arsr_reg &= MPMU_ARSR_SWR_MASK; // masking SWR
+			if (panic_reason && !strcmp(panic_reason, "__forced_upload"))
+				writel(arsr_reg | RESET_FORCE_UPLOAD, MPMU_ARSR) ; // Intended panic for force upload.
+			else
+				writel(arsr_reg | RESET_PANIC, MPMU_ARSR) ; // Real Panic
+#if defined(CONFIG_MACH_LT02)
+		}
+#endif
+	}
 #endif 
 
 	if (board_reset(mode, cmd))

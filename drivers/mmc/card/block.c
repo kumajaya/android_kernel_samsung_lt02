@@ -44,6 +44,7 @@
 #include <asm/uaccess.h>
 
 #include "queue.h"
+#include "../core/core.h"
 
 MODULE_ALIAS("mmc:block");
 #ifdef MODULE_PARAM_PREFIX
@@ -362,18 +363,18 @@ struct scatterlist *mmc_blk_get_sg(struct mmc_card *card,
 	int total_sec_cnt, sec_cnt;
 	int max_seg_size, len;
 
-	sl = kmalloc(sizeof(struct scatterlist) * card->host->max_segs, GFP_KERNEL);
+	total_sec_cnt = size;
+	max_seg_size = card->host->max_seg_size;
+	len = (size - 1 + max_seg_size) / max_seg_size;
+	sl = kmalloc(sizeof(struct scatterlist) * len, GFP_KERNEL);
+
 	if (!sl) {
 		return NULL;
 	}
 
 	sg = (struct scatterlist *)sl;
-	sg_init_table(sg, card->host->max_segs);
+	sg_init_table(sg, len);
 
-	total_sec_cnt = size;
-	max_seg_size = card->host->max_seg_size;
-
-	len = 0;
 	while (total_sec_cnt) {
 		if (total_sec_cnt < max_seg_size)
 			sec_cnt = total_sec_cnt;
@@ -382,7 +383,6 @@ struct scatterlist *mmc_blk_get_sg(struct mmc_card *card,
 		sg_set_page(sg, virt_to_page(buf), sec_cnt, offset_in_page(buf));
 		buf = buf + sec_cnt;
 		total_sec_cnt = total_sec_cnt - sec_cnt;
-		len++;
 		if (total_sec_cnt == 0)
 			break;
 		sg = sg_next(sg);
@@ -442,7 +442,7 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 		data.blocks = idata->ic.blocks;
 		sg = mmc_blk_get_sg(card, idata->buf, &len, idata->buf_bytes);
 		data.sg = sg;
-		data.sg_len = len ;
+		data.sg_len = len;
 
 		if (idata->ic.write_flag)
 			data.flags = MMC_DATA_WRITE;
@@ -530,12 +530,97 @@ cmd_err:
 	return err;
 }
 
+static int mmc_blk_ioctl_preffu(struct block_device *bdev,
+		int clock)
+{
+	struct mmc_blk_ioc_data *idata;
+	struct mmc_blk_data *md;
+	struct mmc_card *card;
+
+	int err = 0;
+	int rate = 0;
+
+	/*
+	 * The caller must have CAP_SYS_RAWIO, and must be calling this on the
+	 * whole block device, not on a partition.  This prevents overspray
+	 * between sibling partitions.
+	 */
+	if ((!capable(CAP_SYS_RAWIO)) || (bdev != bdev->bd_contains))
+		return -EPERM;
+
+	md = mmc_blk_get(bdev->bd_disk);
+	if (!md) {
+		err = -EINVAL;
+		goto cmd_err;
+	}
+
+	card = md->queue.card;
+	if (IS_ERR(card)) {
+		err = PTR_ERR(card);
+		goto cmd_err;
+	}
+
+	/*set bus width 1 and unset HS mode*/
+	/*init device to set highspeed mode(SDR) */
+	card->host->caps &= ~(MMC_CAP_1_8V_DDR | MMC_CAP_1_2V_DDR |
+			MMC_CAP_4_BIT_DATA | MMC_CAP_8_BIT_DATA | MMC_CAP_MMC_HIGHSPEED);
+
+	card->state &= ~(MMC_STATE_HIGHSPEED | MMC_STATE_HIGHSPEED_DDR);
+	card->host->ios.chip_select = MMC_CS_DONTCARE;
+	card->host->ios.bus_mode = MMC_BUSMODE_OPENDRAIN;
+
+	card->host->ios.bus_width = MMC_BUS_WIDTH_1;
+	card->host->ios.timing = MMC_TIMING_LEGACY;
+
+	mmc_host_clk_hold(card->host);
+	mmc_set_clock(card->host, card->host->f_init);
+	mmc_host_clk_release(card->host);
+
+	card->host->bus_ops->power_restore(card->host);
+
+	/*change LEGACY timing to change clock
+	  Marvell AP can change clock only LEGACY mode*/
+	card->host->ios.bus_width = MMC_BUS_WIDTH_1;
+	card->host->ios.timing = MMC_TIMING_LEGACY;
+
+	if (clock >= 52000000)
+		rate = 52000000;
+	else if (clock < 52000000 && clock >= 26000000)
+		rate = 26000000;
+	else
+		rate = 13000000;
+
+	mmc_set_clock(card->host, rate);
+
+	return err;
+
+cmd_err:
+	return err;
+}
+
 static int mmc_blk_ioctl(struct block_device *bdev, fmode_t mode,
 	unsigned int cmd, unsigned long arg)
 {
+	struct mmc_blk_data *md = bdev->bd_disk->private_data;
+	struct mmc_card *card = md->queue.card;
 	int ret = -EINVAL;
+
+
 	if (cmd == MMC_IOC_CMD)
 		ret = mmc_blk_ioctl_cmd(bdev, (struct mmc_ioc_cmd __user *)arg);
+	else if(cmd == MMC_IOC_CLOCK)
+	{
+		/* again init set 1bit width and 13Mhz*/
+		ret = mmc_blk_ioctl_preffu(bdev, (int) arg);
+		printk(KERN_DEBUG "MMC_IOC_CLOCK : %d",arg);
+	}
+	else if(cmd == MMC_IOC_BUSWIDTH)
+	{
+		unsigned int width = (unsigned int)arg;
+		mmc_set_bus_width(card->host, width);
+		printk(KERN_DEBUG "MMC_IOC_BUSWIDTH : %d",width);
+		ret = 0;
+	}
 	return ret;
 }
 

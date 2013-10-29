@@ -77,7 +77,7 @@ typedef struct Vx5d3b_cabc_info {
 	bool				lp_charge;
 };
 
-static struct Vx5b3d_backlight_value backlight_table[3] = {
+static struct Vx5b3d_backlight_value backlight_table[5] = {
 	{	/*BOE/CPT*/
 		.max = 235,
 		.mid = 135,
@@ -89,6 +89,16 @@ static struct Vx5b3d_backlight_value backlight_table[3] = {
 		.low = 2,
 		.dim = 1,
 	}, {	/*BOEVE*/
+		.max = 235,
+		.mid = 135,
+		.low = 2,
+		.dim = 1,
+	}, {	/*BOEOLD*/
+		.max = 235,
+		.mid = 135,
+		.low = 2,
+		.dim = 1,
+	}, {	/*SDCVE*/
 		.max = 235,
 		.mid = 135,
 		.low = 2,
@@ -641,13 +651,29 @@ static ssize_t lcd_type_show(struct device *dev,
 {
 	struct Vx5d3b_cabc_info *Vee_cabc = g_vx5d3b;
 	char temp[20];
-
-	if (Vee_cabc->lcd_panel)
+/*
+#define LT02_CPT_PANEL 0
+#define LT02_SDC_PANEL 1
+#define LT02_BOEVE_PANEL 2
+#define LT02_BOEOLD_PANEL 3
+#define LT02_SDCVE_PANEL 4 // VE_GROUP
+*/
+	/*VE_GROUP TODO*/
+	if (Vee_cabc->lcd_panel == 0) /*CPT*/
+		sprintf(temp, "CPT_LTL070NL01\n");
+	else if (Vee_cabc->lcd_panel == 1) /*SDC*/
 		sprintf(temp, "SDC_LTL070NL01\n");
+	else if (Vee_cabc->lcd_panel == 2) /*BOEVE*/
+		sprintf(temp, "BOE_VEHV070WSA\n");
+	else if (Vee_cabc->lcd_panel == 3) /*BOEOLD*/
+		sprintf(temp, "BOE_HV070WSA\n");
+	else if (Vee_cabc->lcd_panel == 4) /*SDCVE*/
+		sprintf(temp, "SDC_VELTL070NL\n");
 	else
 		sprintf(temp, "BOE_HV070WSA\n");
 
 	strcat(buf, temp);
+
 	return strlen(buf);
 }
 static DEVICE_ATTR(lcd_type, 0664, lcd_type_show, NULL);
@@ -1490,14 +1516,24 @@ void __init lt02_add_lcd_mipi(void)
 	vx5d3bInfo->lcd_panel = panel_id;
 	vx5d3bInfo->vee_lightValue = &backlight_table[vx5d3bInfo->lcd_panel];
 
+
 	if (vx5d3bInfo->lcd_panel == 2 || vx5d3bInfo->lcd_panel == 0) {
 		fb->modes->left_margin = 130;/*BOEVE / CPT*/
 		fb->modes->hsync_len = 16;
 	}
+	else if (vx5d3bInfo->lcd_panel == 4)
+	{
+		fb->modes->hsync_len = 16;
+		fb->modes->left_margin = 110;/*SDCVE*/
+		fb->modes->right_margin = 150;
+		fb->modes->vsync_len = 4;
+		fb->modes->upper_margin = 7;
+		fb->modes->lower_margin = 7;	
+	}		
 
 	if (device_create_file(&vx5d3bInfo->bd->dev, &dev_attr_auto_brightness) < 0)
 		pr_err("Failed to create auto_brightness\n");
-	
+
 	if (device_create_file(&vx5d3bInfo->bd->dev, &dev_attr_vx5b3d_Regread) < 0)
 		pr_err("Failed to create vx5b3d_Regread\n");
 
