@@ -406,7 +406,7 @@ __v7_pj4b_proc_info:
 	.long  0xfffffff0
 	/* It can used same set up function as ca9mp */
 	__v7_proc __v7_ca9mp_setup
-	.size	__v7_pj4_proc_info, . - __v7_pj4_proc_info
+	.size	__v7_pj4b_proc_info, . - __v7_pj4b_proc_info
 #endif	/* CONFIG_ARM_LPAE */
 
 	/*
