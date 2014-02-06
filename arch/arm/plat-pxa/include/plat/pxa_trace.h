@@ -293,6 +293,22 @@ TRACE_EVENT(pxa_ddr_lpm,
 	TP_printk("dll val: 0x%x", __entry->value)
 );
 
+TRACE_EVENT(pxa_ddr_lpm_tbl_update,
+	TP_PROTO(u32 value),
+
+	TP_ARGS(value),
+
+	TP_STRUCT__entry(
+		__field(u32, value)
+	),
+
+	TP_fast_assign(
+		__entry->value = value;
+	),
+
+	TP_printk("lpm_tbl: 0x%x", __entry->value)
+);
+
 /* This file can get included multiple times, TRACE_HEADER_MULTI_READ at top */
 
 #endif /* _TRACE_PXA_TRACE_H */

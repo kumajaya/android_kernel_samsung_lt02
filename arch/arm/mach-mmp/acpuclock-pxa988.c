@@ -46,6 +46,11 @@
 #define CREATE_TRACE_POINTS
 #include <plat/pxa_trace.h>
 
+static inline int has_feat_dll_bypass_opti(void)
+{
+	return cpu_is_pxa988() || cpu_is_pxa986();
+}
+
 /* core,ddr,axi clk src sel set register desciption */
 union pmum_fccr {
 	struct {
@@ -1779,6 +1784,21 @@ out:
 	return ret;
 }
 
+static void ddr_lpm_tbl_update(int bypass)
+{
+	trace_pxa_ddr_lpm_tbl_update(bypass);
+
+	if (bypass) {
+		INSERT_ENTRY(0x0, 0xC, 0x0);
+		INSERT_ENTRY(PHY_CTRL14_PHY_SYNC, 0x2024C, 0x1);
+	} else {
+		INSERT_ENTRY(0x0, 0xC, 0x0);
+		INSERT_ENTRY(PHY_CTRL14_DLL_RESET, 0x24C, 0x1);
+		INSERT_ENTRY(PHY_CTRL14_DLL_UPDATE, 0x24C, 0x2);
+		INSERT_ENTRY(PHY_CTRL14_PHY_SYNC, 0x2024C, 0x3);
+	}
+}
+
 static void pxa988_ddraxi_init(struct clk *clk)
 {
 	struct pxa988_ddr_axi_opt cur_op;
@@ -1798,6 +1818,17 @@ static void pxa988_ddraxi_init(struct clk *clk)
 	get_cur_ddr_axi_op(&cur_op);
 	op_index = ddr_rate2_op_index(cur_op.dclk);
 	cur_ddraxi_op = &ddr_axi_opt[op_index];
+
+	/*
+	 * If the init DDR freq is lower than 400Mhz, optimize the
+	 * DDR lpm table to bypass dll reset/update.
+	 */
+	if (has_feat_dll_bypass_opti()) {
+		if (ddr_axi_opt[op_index].dclk < 400)
+			ddr_lpm_tbl_update(1);
+		else
+			ddr_lpm_tbl_update(0);
+	}
 
 	clk->rate = ddr_axi_opt[op_index].dclk * MHZ;
 	clk->parent = ddr_axi_opt[op_index].ddr_parent;
@@ -1861,6 +1892,23 @@ int wakeup_ddr_fc_seq(void)
 }
 #endif
 
+/*
+ * For the DDR freq < threshold, we use DLL bypass mode, so we could
+ * use optimized DDR table 0 to skip DLL reset and DLL update to
+ * save the DDR restore time when system exit from D1pp or deeper
+ * state.
+ */
+static void ddr_lpm_tbl_optimize(unsigned int old, unsigned int new,
+		unsigned int threshold)
+{
+	if (has_feat_dll_bypass_opti()) {
+		if ((old >= threshold) && (new < threshold))
+			ddr_lpm_tbl_update(1);
+		else if ((old < threshold) && (new >= threshold))
+			ddr_lpm_tbl_update(0);
+	}
+}
+
 static int pxa988_ddraxi_setrate(struct clk *clk, unsigned long rate)
 {
 	struct pxa988_ddr_axi_opt *md_new, *md_old;
@@ -1911,6 +1959,9 @@ static int pxa988_ddraxi_setrate(struct clk *clk, unsigned long rate)
 				pr_debug("EOF_FC: wait eof timeout! force ddr fc!\n");
 				spin_lock(&fc_seq_lock);
 				ret = set_ddr_axi_freq(md_old, md_new);
+				if (!ret)
+					ddr_lpm_tbl_optimize(md_old->dclk,
+						md_new->dclk, 400);
 				spin_unlock(&fc_seq_lock);
 				if (ret)
 					ddr_fc_failure = 1;
@@ -1926,6 +1977,10 @@ static int pxa988_ddraxi_setrate(struct clk *clk, unsigned long rate)
 	} else {
 		spin_lock(&fc_seq_lock);
 		ret = set_ddr_axi_freq(md_old, md_new);
+		if (!ret)
+			ddr_lpm_tbl_optimize(md_old->dclk,
+				md_new->dclk, 400);
+
 		spin_unlock(&fc_seq_lock);
 	}
 
@@ -1934,6 +1989,10 @@ static int pxa988_ddraxi_setrate(struct clk *clk, unsigned long rate)
 #else
 	spin_lock(&fc_seq_lock);
 	ret = set_ddr_axi_freq(md_old, md_new);
+	if (!ret)
+		ddr_lpm_tbl_optimize(md_old->dclk,
+			md_new->dclk, 400);
+
 	spin_unlock(&fc_seq_lock);
 	if (ret)
 		goto out;
@@ -2743,3 +2802,36 @@ err_cur_cpu_op:
 late_initcall(__init_create_fc_debugfs_node);
 late_initcall(__init_create_pm_dro_node);
 #endif
+
+static unsigned long pxa988_periph_getrate(struct clk *clk)
+{
+	unsigned long periph_rate;
+
+	if (likely(cur_cpu_op))
+		periph_rate = cur_cpu_op->periphclk * MHZ;
+	else
+		/*
+		* when cur_cpu_op is not ready yet, calculate it from lpj,
+		* it's [core freq] / 8.
+		*/
+		periph_rate = loops_per_jiffy * 2 * HZ / 8;
+
+	return periph_rate;
+}
+
+struct clkops periph_clk_ops = {
+	.getrate = pxa988_periph_getrate,
+};
+
+static struct clk pxa988_periph_clk = {
+	.name = "smp_twd",
+	.lookup = {
+		.dev_id = "smp_twd",
+	},
+	.ops = &periph_clk_ops,
+};
+
+void __init pxa988_init_early(void)
+{
+	pxa988_init_one_clock(&pxa988_periph_clk);
+}

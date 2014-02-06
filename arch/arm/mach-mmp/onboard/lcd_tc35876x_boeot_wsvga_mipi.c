@@ -992,7 +992,8 @@ static int lt02_lcd_power(struct pxa168fb_info *fbi,
 			if (system_rev >= LT02_R0_4)
 			regulator_disable(lvds1_1p8);
 
-			pr_info("lt02_lcd_power off !\n");		
+			pr_info("lt02_lcd_power off !\n");
+			msleep(200);
 	}
 	
 	mutex_unlock(&vx5d3b->pwr_lock);
@@ -1517,15 +1518,15 @@ void __init lt02_add_lcd_mipi(void)
 	vx5d3bInfo->vee_lightValue = &backlight_table[vx5d3bInfo->lcd_panel];
 
 
-	if (vx5d3bInfo->lcd_panel == 2 || vx5d3bInfo->lcd_panel == 0) {
-		fb->modes->left_margin = 130;/*BOEVE / CPT*/
+	if (vx5d3bInfo->lcd_panel == 0) {
+		fb->modes->left_margin = 130;/* CPT*/
 		fb->modes->hsync_len = 16;
 	}
-	else if (vx5d3bInfo->lcd_panel == 4)
+	else if (vx5d3bInfo->lcd_panel == 2 || vx5d3bInfo->lcd_panel == 4)
 	{
 		fb->modes->hsync_len = 16;
-		fb->modes->left_margin = 110;/*SDCVE*/
-		fb->modes->right_margin = 150;
+		fb->modes->left_margin = 142;/*BOEVE / SDCVE*/
+		fb->modes->right_margin = 185;
 		fb->modes->vsync_len = 4;
 		fb->modes->upper_margin = 7;
 		fb->modes->lower_margin = 7;	

@@ -126,6 +126,10 @@
 #define DMCU_PHY_DLL_WL_CTRL2		(0x38C)
 #define DMCU_PHY_DLL_RL_CTRL		(0x390)
 
+#define PHY_CTRL14_DLL_RESET		(1u << 29)
+#define PHY_CTRL14_DLL_UPDATE		(1u << 30)
+#define PHY_CTRL14_PHY_SYNC		(1u << 31)
+
 #ifdef CONFIG_CPU_PXA988
 #define DMCU_PHY_CTRL_TESTMODE		(0x400)
 #endif
@@ -139,5 +143,12 @@
 #define DMCU_PERF_CNT1			(0x454)
 #define DMCU_PERF_CNT2			(0x458)
 #define DMCU_PERF_CNT3			(0x45c)
+
+#define INSERT_ENTRY(value, regid, index)			\
+	do {							\
+		__raw_writel(value, DMCU_VIRT_REG(DMCU_HWTDAT0));\
+		__raw_writel(regid, DMCU_VIRT_REG(DMCU_HWTDAT1));\
+		__raw_writel(index, DMCU_VIRT_REG(DMCU_HWTCTRL));\
+	} while (0)
 
 #endif /* __ASM_MACH_MCU_H */

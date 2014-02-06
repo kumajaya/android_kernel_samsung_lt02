@@ -3312,6 +3312,7 @@ static void __init emeidkb_init(void)
 
 MACHINE_START(LT02, "PXA988")
 	.map_io		= mmp_map_io,
+	.init_early	= pxa988_init_early,
 	.init_irq	= pxa988_init_irq,
 	.timer		= &pxa988_timer,
 	.reserve	= pxa988_reserve,

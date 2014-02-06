@@ -17,6 +17,8 @@
 #include <linux/io.h>
 #include <asm/cacheflush.h>
 #include <asm/setup.h>
+#include <asm/hardware/gic.h>
+#include <mach/addr-map.h>
 
 static int has_died;
 static void *indicator;
@@ -25,7 +27,13 @@ static int
 panic_flush(struct notifier_block *this, unsigned long event, void *ptr)
 {
 	struct membank *bank;
+	u32 icdispr;
 	int i;
+
+	for (i = 0; i < 4; i++) {
+		icdispr = readl_relaxed(GIC_DIST_VIRT_BASE + GIC_DIST_PENDING_SET + (i << 2));
+		pr_info("Pending interrupt status(%d): 0x%x\n", i, icdispr);
+	}
 
 	raw_spin_lock_irq(&panic_lock);
 	if (has_died)

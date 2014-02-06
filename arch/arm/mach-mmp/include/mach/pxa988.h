@@ -6,6 +6,7 @@ struct sys_timer;
 extern struct sys_timer pxa988_timer;
 extern void __init pxa988_init_gic(void);
 extern void __init pxa988_init_irq(void);
+extern void __init pxa988_init_early(void);
 extern void __init pxa988_reserve(void);
 extern void pxa988_ripc_lock(void);
 extern void pxa988_ripc_unlock(void);

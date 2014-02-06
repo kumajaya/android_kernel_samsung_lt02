@@ -23,6 +23,7 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <mach/regs-coresight.h>
 
 #include "cpuidle.h"
 
@@ -444,11 +445,14 @@ static int cpuidle_coupled_clear_pokes(int cpu)
  * interrupts while preparing for idle, and it will always return with
  * interrupts enabled.
  */
+#define NORMAL_MAX_COUNT	20000
 int cpuidle_enter_state_coupled(struct cpuidle_device *dev,
 		struct cpuidle_driver *drv, int next_state)
 {
 	int entered_state = -1;
 	struct cpuidle_coupled *coupled = dev->coupled;
+	int loop_count;
+	int wakeup_ipi;
 
 	if (!coupled)
 		return -EINVAL;
@@ -468,6 +472,8 @@ int cpuidle_enter_state_coupled(struct cpuidle_device *dev,
 	cpuidle_coupled_set_waiting(dev->cpu, coupled, next_state);
 
 retry:
+	wakeup_ipi = 0;
+	loop_count = 0;
 	/*
 	 * Wait for all coupled cpus to be idle, using the deepest state
 	 * allowed for a single cpu.
@@ -504,13 +510,30 @@ retry:
 	cpuidle_coupled_set_ready(coupled);
 	while (!cpuidle_coupled_cpus_ready(coupled)) {
 		/* Check if any other cpus bailed out of idle. */
-		if (!cpuidle_coupled_cpus_waiting(coupled))
+		if (!cpuidle_coupled_cpus_waiting(coupled)) {
 			if (!cpuidle_coupled_set_not_ready(coupled))
 				goto retry;
-
+		} else {
+			if (!wakeup_ipi) {
+				if (loop_count++ > NORMAL_MAX_COUNT) {
+					pr_info("Sending IPI to wakeup other core!\n");
+					cpuidle_coupled_poke_others(dev->cpu, coupled);
+					wakeup_ipi = 1;
+					loop_count = 0;
+				}
+			} else {
+				if (loop_count++ > 80000000) {
+					pr_info("Core1 can't response, trigger panic!\n");
+					coresight_panic_locked_cpu(1);
+					loop_count = 0;
+					local_irq_enable();
+					while(1)
+						cpu_relax();
+				}
+			}
+		}
 		cpu_relax();
 	}
-
 	/* all cpus have acked the coupled state */
 	next_state = cpuidle_coupled_get_state(dev, coupled);
 

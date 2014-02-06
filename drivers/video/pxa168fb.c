@@ -1908,7 +1908,7 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 	struct fb_var_screeninfo *var = &(fbi->fb_info->var);
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 
-	if (panel == 0 || panel == 2) /*BOE / CPT*/ {
+	if (panel == 0) /* CPT*/ {
 
 		switch(index) {
 
@@ -1951,14 +1951,14 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 
 			break;
 		}
-	} else if ( panel == 4) /* SDCVE */ {
+	} else if (panel == 2 || panel == 4) /*BOE / SDCVE */ {
 		/*VE_GROUP*/
 		switch(index) {
 
 		case 0: /*48.19M*/
 			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 110;
-			mi->modes->right_margin = 150;
+			mi->modes->left_margin = 142;
+			mi->modes->right_margin = 185;
 			mi->modes->vsync_len  =  4;
 			mi->modes->upper_margin  =  7;
 			mi->modes->lower_margin  =  7;
@@ -1966,8 +1966,8 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 
 		case 1:	/*50.98M*/
 			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 134;
-			mi->modes->right_margin = 200;
+			mi->modes->left_margin = 142;
+			mi->modes->right_margin = 185;
 			mi->modes->vsync_len  =  4;
 			mi->modes->upper_margin  =  7;
 			mi->modes->lower_margin  =  7;
@@ -1975,8 +1975,8 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 
 		case 2: /*50.18M*/
 			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 110;
-			mi->modes->right_margin = 200;
+			mi->modes->left_margin = 142;
+			mi->modes->right_margin = 185;
 			mi->modes->vsync_len  =  4;
 			mi->modes->upper_margin  =  7;
 			mi->modes->lower_margin  =  7;
@@ -1984,8 +1984,8 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 
 		case 3: /*54.00M*/
 			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 110;
-			mi->modes->right_margin = 159;
+			mi->modes->left_margin = 142;
+			mi->modes->right_margin = 185;
 			mi->modes->vsync_len  =  4;
 			mi->modes->upper_margin  =  7;
 			mi->modes->lower_margin  =  7;
