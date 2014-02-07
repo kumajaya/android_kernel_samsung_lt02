@@ -93,7 +93,7 @@
 #endif
 /*-------------------------------------------------------------------------*/
 
-#define MTPG_BULK_BUFFER_SIZE	4096
+#define MTPG_BULK_BUFFER_SIZE	16384
 #define MTPG_INTR_BUFFER_SIZE	28
 
 /* number of rx and tx requests to allocate */

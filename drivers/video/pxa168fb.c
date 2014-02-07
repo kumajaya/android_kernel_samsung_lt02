@@ -474,7 +474,7 @@ static void set_mode(struct pxa168fb_info *fbi, struct fb_var_screeninfo *var,
 	var->yres = mode->yres;
 	var->xres_virtual = max(var->xres, var->xres_virtual);
 	if (ystretch && !fb_share)
-		var->yres_virtual = var->yres * 3;
+		var->yres_virtual = var->yres * ((ystretch > 1) ? ystretch : 2);
 	else
 		var->yres_virtual = max(var->yres, var->yres_virtual);
 	var->grayscale = 0;
@@ -776,6 +776,7 @@ static int pxa168fb_set_par(struct fb_info *info)
 	struct pxa168fb_info *fbi = info->par;
 	struct fb_var_screeninfo *var = &info->var;
 	struct regshadow *shadowreg = &fbi->shadowreg;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 	int pix_fmt;
 	u32 flags;
 
@@ -791,7 +792,9 @@ static int pxa168fb_set_par(struct fb_info *info)
 	if (!var->xres_virtual)
 		var->xres_virtual = var->xres;
 	if (!var->yres_virtual)
-		var->yres_virtual = var->yres * 3;
+		var->yres_virtual = var->yres *
+			((mi->mmap > 1) ? mi->mmap : 2);
+
 	var->grayscale = 0;
 	var->accel_flags = FB_ACCEL_NONE;
 	var->rotate = FB_ROTATE_UR;
@@ -912,7 +915,7 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 				struct fb_info *info)
 {
 	struct pxa168fb_info *fbi = info->par;
-	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+
 
 	dev_dbg(info->dev, "Enter %s\n", __func__);
 
@@ -926,8 +929,9 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 	 * 3 buf support, if two buffers deliverd in one vsync,
 	 * second frame need to wait for vsync
 	 */
-	if ((atomic_dec_and_test(&fbi->vsync_cnt)
-		|| mi->recovery_mode) && NEED_VSYNC(fbi)) {
+
+	if ((atomic_dec_and_test(&fbi->vsync_cnt) )&& NEED_VSYNC(fbi)){
+
 		pr_debug("2 frames delivered in one vsync\n");
 		wait_for_vsync(fbi, SYNC_SELF);
 	}
@@ -1413,7 +1417,10 @@ static int pxa168fb_init_mode(struct fb_info *info,
 		var->xres_virtual = mi->xres_virtual;
 	else
 		var->xres_virtual = var->xres;
-	var->yres_virtual = var->yres * 2;
+	//var->yres_virtual = var->yres * 2;
+	var->yres_virtual = var->yres *
+                        ((mi->mmap > 1) ? mi->mmap : 2);
+
 
 #if 0
 	if (!var->pixclock) {
@@ -1663,6 +1670,7 @@ static int _pxa168fb_resume(struct pxa168fb_info *fbi)
 		irq_mask_set(fbi->id, 0xffffffff, fbi->irq_mask);
 
 	fbi->active = 1;
+	pxa168fb_set_par(info);
 	spin_unlock(&fbi->var_lock);
 
 	/* restore dma after resume */
@@ -1908,7 +1916,7 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 	struct fb_var_screeninfo *var = &(fbi->fb_info->var);
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 
-	if (panel == 0) /* CPT*/ {
+	if (panel == 0) /*CPT*/ {
 
 		switch(index) {
 
@@ -2013,6 +2021,8 @@ void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigne
 	pxa168fb_set_par(info);
 
 }
+
+extern void sec_getlog_supply_fbinfo(struct fb_info *fb);
 
 static int __devinit pxa168fb_probe(struct platform_device *pdev)
 {
@@ -2203,7 +2213,7 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	info->screen_size = fbi->fb_size;
 
 	/* Set video mode according to platform data */
-	set_mode(fbi, &info->var, mi->modes, mi->pix_fmt, 1);
+	set_mode(fbi, &info->var, mi->modes, mi->pix_fmt, mi->mmap);
 
 	fb_videomode_to_modelist(mi->modes, mi->num_modes, &info->modelist);
 
@@ -2285,7 +2295,13 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	pr_info("pxa168fb: frame buffer device was loaded"
 		" to /dev/fb%d <%s>.\n", info->node, info->fix.id);
 
-	atomic_set(&fbi->vsync_cnt, 2);
+	if(mi->mmap < 3)
+		atomic_set(&fbi->vsync_cnt, 1);
+	else
+		atomic_set(&fbi->vsync_cnt, 2);
+
+	sec_getlog_supply_fbinfo(fbi->fb_info);
+	
 #ifdef CONFIG_PXA688_PHY
 	ret = device_create_file(&pdev->dev, &dev_attr_phy);
 	if (ret < 0) {
@@ -2331,6 +2347,12 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	}
 
 	ret = device_create_file(&pdev->dev, &dev_attr_vsync_ts);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "device attr create fail: %d\n", ret);
+		goto failed_free_cmap;
+	}
+
+	ret = device_create_file(&pdev->dev, &dev_attr_lvds_clk_switch);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "device attr create fail: %d\n", ret);
 		goto failed_free_cmap;
@@ -2429,6 +2451,20 @@ static int __devexit pxa168fb_remove(struct platform_device *pdev)
 	return 0;
 }
 
+static void pxa168fb_shutdown(struct platform_device *pdev)
+{
+
+#if defined(CONFIG_MACH_LT02)
+	struct pxa168fb_info *fbi = platform_get_drvdata(pdev);
+	struct pxa168fb_mach_info *mi = pdev->dev.platform_data;
+
+	if ((mi->pxa168fb_lcd_power))
+		mi->pxa168fb_lcd_power(fbi, mi->spi_gpio_cs,
+					mi->spi_gpio_reset, 0);
+#endif
+
+}
+
 static const struct dev_pm_ops pxa168fb_pm_ops = {
 	SET_RUNTIME_PM_OPS(pxa168fb_runtime_suspend, pxa168fb_runtime_resume,
 			   NULL)
@@ -2442,6 +2478,7 @@ static struct platform_driver pxa168fb_driver = {
 	},
 	.probe		= pxa168fb_probe,
 	.remove		= __devexit_p(pxa168fb_remove),
+	.shutdown	= pxa168fb_shutdown,
 };
 
 module_platform_driver(pxa168fb_driver);

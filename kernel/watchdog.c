@@ -463,11 +463,18 @@ static void watchdog_prepare_cpu(int cpu)
 {
 	struct hrtimer *hrtimer = &per_cpu(watchdog_hrtimer, cpu);
 
-	WARN_ON(per_cpu(softlockup_watchdog, cpu));
-
 #ifdef CONFIG_SMP_HARDLOCKUP_DETECTOR
+	unsigned long flags;
+
+	spin_lock_irqsave(&hardlockup_lock, flags);
+	/* update boot CPU's timestamp */
+	per_cpu(hardlockup_touch_ts, smp_processor_id()) = get_timestamp(0);
+
 	per_cpu(hardlockup_touch_ts, cpu) = get_timestamp(0);
+	spin_unlock_irqrestore(&hardlockup_lock, flags);
 #endif /* CONFIG_SMP_HARDLOCKUP_DETECTOR */
+
+	WARN_ON(per_cpu(softlockup_watchdog, cpu));
 
 	hrtimer_init(hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	hrtimer->function = watchdog_timer_fn;

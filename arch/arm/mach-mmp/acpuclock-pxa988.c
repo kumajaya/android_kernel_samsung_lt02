@@ -844,10 +844,10 @@ static void __init __init_fc_setting(void)
 	unsigned int regval;
 	union pmua_cc cc_ap, cc_cp;
 	/*
-	 * enable AP/CP FC done interrupt for one step,
+	 * enable AP FC done interrupt for one step,
 	 * while not use three interrupts by three steps
 	 */
-	__raw_writel((1 << 1) | (1 << 0), APMU_IMR);
+	__raw_writel((1 << 1), APMU_IMR);
 
 	/* always vote for CP allow AP FC */
 	cc_cp.v = __raw_readl(APMU_CP_CCR);
@@ -869,7 +869,10 @@ static void __init __init_fc_setting(void)
 	regval |= (1 << 0) | (1 << 3);
 	__raw_writel(regval, APMU_DEBUG);
 
-	/* always use async for DDR, AXI interface */
+	/*
+	 * Always use async for DDR, AXI interface,
+	 * and always vote for AP allow FC
+	 */
 	cc_ap.v = __raw_readl(APMU_CCR);
 	cc_ap.b.async5 = 1;
 	cc_ap.b.async4 = 1;
@@ -877,6 +880,7 @@ static void __init __init_fc_setting(void)
 	cc_ap.b.async3 = 1;
 	cc_ap.b.async2 = 1;
 	cc_ap.b.async1 = 1;
+	cc_ap.b.core_allow_spd_chg = 1;
 	__raw_writel(cc_ap.v, APMU_CCR);
 }
 
@@ -917,7 +921,7 @@ static unsigned int ddr_rate2_op_index(unsigned int rate)
 }
 
 static int fc_lock_ref_cnt;
-static void get_fc_lock(void)
+static int get_fc_lock(void)
 {
 	union pmua_dm_cc dm_cc_ap;
 
@@ -926,17 +930,29 @@ static void get_fc_lock(void)
 	if (fc_lock_ref_cnt == 1) {
 		int timeout = 100000;
 
-		/* AP-CP FC mutual exclusion */
+		/*
+		 * AP-CP FC mutual exclusion,
+		 * APMU_DM_CC_AP cp_rd_status = 0, ap_rd_status = 1
+		 */
 		dm_cc_ap.v = __raw_readl(APMU_CCSR);
-		while (dm_cc_ap.b.cp_rd_status && timeout) {
+		while (timeout) {
+			if (!dm_cc_ap.b.cp_rd_status &&
+				dm_cc_ap.b.ap_rd_status)
+				break;
 			dm_cc_ap.v = __raw_readl(APMU_CCSR);
 			timeout--;
 		}
+
 		if (timeout <= 0) {
 			pr_err("cp does not release its fc lock\n");
-			BUG();
+			pr_err("%s CCSR_AP when_lock:%x Now:%x CC_AP:%x\n",
+				__func__, dm_cc_ap.v, __raw_readl(APMU_CCSR),
+				__raw_readl(APMU_CCR));
+			WARN_ON(1);
+			return -EAGAIN;
 		}
 	}
+	return 0;
 }
 
 static void put_fc_lock(void)
@@ -962,7 +978,6 @@ static void get_cur_cpu_op(struct pxa988_cpu_opt *cop)
 {
 	union pmua_pllsel pllsel;
 	union pmua_dm_cc dm_cc_ap;
-	union pmua_cc cc_cp;
 	union pmua_dm_cc2 dm_cc2_ap;
 	unsigned int pll1_pll3_sel;
 	struct clk *parent;
@@ -971,11 +986,6 @@ static void get_cur_cpu_op(struct pxa988_cpu_opt *cop)
 
 	dm_cc_ap.v = __raw_readl(APMU_CCSR);
 	dm_cc2_ap.v = __raw_readl(APMU_CC2SR);
-	cc_cp.v = __raw_readl(APMU_CP_CCR);
-	cc_cp.b.core_rd_st_clear = 1;
-	__raw_writel(cc_cp.v, APMU_CP_CCR);
-	cc_cp.b.core_rd_st_clear = 0;
-	__raw_writel(cc_cp.v, APMU_CP_CCR);
 	pllsel.v = __raw_readl(APMU_PLL_SEL_STATUS);
 	pll1_pll3_sel = __raw_readl(MPMU_PLL3CR);
 
@@ -1025,17 +1035,11 @@ static void get_cur_ddr_axi_op(struct pxa988_ddr_axi_opt *cop)
 {
 	union pmua_pllsel pllsel;
 	union pmua_dm_cc dm_cc_ap;
-	union pmua_cc cc_cp;
 	struct clk *parent;
 
 	get_fc_lock();
 
 	dm_cc_ap.v = __raw_readl(APMU_CCSR);
-	cc_cp.v = __raw_readl(APMU_CP_CCR);
-	cc_cp.b.core_rd_st_clear = 1;
-	__raw_writel(cc_cp.v, APMU_CP_CCR);
-	cc_cp.b.core_rd_st_clear = 0;
-	__raw_writel(cc_cp.v, APMU_CP_CCR);
 	pllsel.v = __raw_readl(APMU_PLL_SEL_STATUS);
 
 	pr_debug("div%x sel%x\n", dm_cc_ap.v, pllsel.v);
@@ -1072,17 +1076,14 @@ static void get_cur_ddr_axi_op(struct pxa988_ddr_axi_opt *cop)
 static void wait_for_fc_done(void)
 {
 	int timeout = 1000;
-
 	while (!((1 << 1) & __raw_readl(APMU_ISR)) && timeout)
 		timeout--;
 	if (timeout <= 0) {
 		WARN(1, "AP frequency change timeout!\n");
-		pr_info("APMU_DEBUG: 0x%x, MPMU_APSR: 0x%x, MPMU_APRR: 0x%x\n",
-		__raw_readl(APMU_DEBUG), __raw_readl(MPMU_APSR),
-		__raw_readl(MPMU_APRR));
+		pr_err("APMU_ISR %x\n", __raw_readl(APMU_ISR));
 	}
-	__raw_writel(0x0, APMU_ISR);
-
+	/* only clear AP fc done signal */
+	__raw_writel(__raw_readl(APMU_ISR) & ~(1 << 1), APMU_ISR);
 }
 
 #ifdef Z1_MCK4_SYNC_WORKAROUND
@@ -1338,9 +1339,9 @@ static void core_fc_seq(struct pxa988_cpu_opt *cop,
 		cp_core_fc_seq(cop, top);
 #endif
 
-	/* 3) Post FC : AP clear allow FC voting */
+	/* 3) Post FC : AP clear allow FC REQ */
 	cc_ap.v = __raw_readl(APMU_CCR);
-	cc_ap.b.core_allow_spd_chg = 0;
+	cc_ap.b.core_freq_chg_req = 0;
 	__raw_writel(cc_ap.v, APMU_CCR);
 
 	/* high -> low */
@@ -1363,7 +1364,6 @@ static int set_core_freq(struct pxa988_cpu_opt *old, struct pxa988_cpu_opt *new)
 
 	pr_debug("CORE set_freq start: old %u, new %u\n",
 		old->pclk, new->pclk);
-	get_fc_lock();
 
 	memcpy(&cop, old, sizeof(struct pxa988_cpu_opt));
 	get_cur_cpu_op(&cop);
@@ -1392,7 +1392,17 @@ static int set_core_freq(struct pxa988_cpu_opt *old, struct pxa988_cpu_opt *new)
 #if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
 	smp_freqchg_pre();
 #endif
+	/* Get lock in irq disable status to short AP hold lock time */
 	local_irq_save(flags);
+	ret = get_fc_lock();
+	if (ret) {
+		local_irq_restore(flags);
+		clk_disable(new->parent);
+#if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
+		smp_freqchg_post();
+#endif
+		goto out;
+	}
 	core_fc_seq(&cop, new);
 	local_irq_restore(flags);
 #if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
@@ -1415,11 +1425,10 @@ static int set_core_freq(struct pxa988_cpu_opt *old, struct pxa988_cpu_opt *new)
 		pr_err("NEW %d %d %d %d %d %d\n", new->ap_clk_src,
 			new->pclk, new->l2clk, new->pdclk, new->baclk,
 			new->periphclk);
-		pr_err("FCCR %x, CCAP %x, PLLSEL %x, DMCCAP %x, "
-			"CCCP %x,  DMCCCP %x\n",
+		pr_err("FCCR %x, CCAP %x, PLLSEL %x, DMCCAP %x, CCCP %x\n",
 			__raw_readl(MPMU_FCCR), __raw_readl(APMU_CCR),
 			__raw_readl(APMU_PLL_SEL_STATUS), __raw_readl(APMU_CCSR),
-			__raw_readl(APMU_CP_CCR), __raw_readl(APMU_CP_CCSR));
+			__raw_readl(APMU_CP_CCR));
 		ret = -EAGAIN;
 		if (cop.ap_clk_src != new->ap_clk_src) {
 			/* restore current src */
@@ -1693,9 +1702,10 @@ static void ddr_axi_fc_seq(struct pxa988_ddr_axi_opt *cop,
 	wait_for_fc_done();
 	trace_pxa_ddraxi_clk_chg(CLK_CHG_EXIT, cop->dclk, top->dclk);
 
-	/* 5) Post FC : AP clear allow FC voting */
+	/* 5) Post FC : AP clear allow FC REQ */
 	cc_ap.v = __raw_readl(APMU_CCR);
-	cc_ap.b.core_allow_spd_chg = 0;
+	cc_ap.b.ddr_freq_chg_req = 0;
+	cc_ap.b.bus_freq_chg_req = 0;
 	__raw_writel(cc_ap.v, APMU_CCR);
 }
 
@@ -1709,7 +1719,6 @@ static int set_ddr_axi_freq(struct pxa988_ddr_axi_opt *old,
 
 	pr_debug("DDR set_freq start: old %u, new %u\n",
 		old->dclk, new->dclk);
-	get_fc_lock();
 
 	memcpy(&cop, old, sizeof(struct pxa988_ddr_axi_opt));
 	get_cur_ddr_axi_op(&cop);
@@ -1734,11 +1743,20 @@ static int set_ddr_axi_freq(struct pxa988_ddr_axi_opt *old,
 #if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
 	smp_freqchg_pre();
 #endif
-
+	/* Get lock in irq disable status to short AP hold lock time */
 	local_irq_save(flags);
+	ret = get_fc_lock();
+	if (ret) {
+		local_irq_restore(flags);
+		clk_disable(new->ddr_parent);
+		clk_disable(new->axi_parent);
+#if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
+		smp_freqchg_post();
+#endif
+		goto out;
+	}
 	ddr_axi_fc_seq(&cop, new);
 	local_irq_restore(flags);
-
 #if defined(CONFIG_CPU_PXA988) && defined(CONFIG_SMP)
 	smp_freqchg_post();
 #endif
@@ -1762,11 +1780,10 @@ static int set_ddr_axi_freq(struct pxa988_ddr_axi_opt *old,
 		       cop.dclk, cop.axi_clk_src, cop.aclk);
 		pr_err("NEW %d %d %d %d\n", new->ddr_clk_src,
 		       new->dclk, new->axi_clk_src, new->aclk);
-		pr_err("FCCR %x, CCAP %x, PLLSEL %x, DMCCAP %x, "
-			"CCCP %x,  DMCCCP %x\n",
+		pr_err("FCCR %x, CCAP %x, PLLSEL %x, DMCCAP %x, CCCP %x\n",
 			__raw_readl(MPMU_FCCR), __raw_readl(APMU_CCR),
 			__raw_readl(APMU_PLL_SEL_STATUS), __raw_readl(APMU_CCSR),
-			__raw_readl(APMU_CP_CCR), __raw_readl(APMU_CP_CCSR));
+			__raw_readl(APMU_CP_CCR));
 		/* restore current src */
 		set_ddr_clk_sel(&cop);
 		set_axi_clk_sel(&cop);

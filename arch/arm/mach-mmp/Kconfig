@@ -162,6 +162,20 @@ config WIFIONLY_BOARD
 		Say 'Y' here if you want to support the Marvell PXA986-based
 		LT02 Series Wifi only (Excluded 3G RF) Board.
 
+config MACH_LT02LGT
+	default n
+	bool "Samsung model LT02LGT"
+	select CPU_PXA988
+	help
+	  Support for Samsung LT02LGT device.
+
+config MACH_LT02_BBY
+	default n
+	bool "LT02 Best Buy device"
+	select CPU_PXA988
+	help
+          Support for Best Buy device.
+
 config FAKE_SYSTEMOFF
         bool "Marvell's MABOS support"
         depends on SUSPEND

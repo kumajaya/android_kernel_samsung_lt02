@@ -30,27 +30,27 @@
 #include "core/sensors_core.h"
 
 /* For Debugging */
-#define asp01_dbgmsg(str, args...) pr_debug("%s: " str, __func__, ##args)
 #undef GRIP_DEBUG
-#define USE_EEPROM
-#define FEATURE_INIT_TOUCH_OFF
 
 #define VENDOR		"ADSEMICON"
 #define CHIP_ID		"ASP01"
 #define CALIBRATION_FILE_PATH	"/efs/grip_cal_data"
-#define CAL_DATA_NUM	24
+#define CAL_DATA_NUM	20
 #define MFM_DATA_NUM	16
 #define MFM_REF_NUM	(MFM_DATA_NUM / 2)
 #define SLAVE_ADDR	0x48
 #define SET_MFM_DONE	(0x1 << 4)
 #define EN_INIT_CAL	(0x1 << 3)
-#define DIV	1000
+#define DIV		1000
 #define BYTE_MSK	0xff
 #define BYTE_SFT	8
-#define RESET_MSK 0xfe
+#define RESET_MSK	0xfe
 #define CAL_CHECK_VAL	40/* CR percent : 40 = 0.5% / 0.125%(step) */
 #define GRIP_CLOSE	1
 #define GRIP_FAR	2
+/* return values */
+#define ASP01_WRONG_RANGE	-1
+#define ASP01_DEV_WORKING	-1
 
 enum asp01_I2C_IF {
 	REG = 0,
@@ -139,7 +139,7 @@ static u8 init_reg[SET_REG_NUM][2] = {
 	{ REG_TOUCH_MFM_CYC,	0x25},
 	{ REG_HI_CAL_SPD,	0x19},
 	{ REG_CAL_SPD,		0x03},
-	{ REG_INIT_REF,		0x00},
+	/* { REG_INIT_REF,	0x00}, */
 	{ REG_BFT_MOT,		0x40},
 	{ REG_TOU_RF_EXT,	0x00},
 	{ REG_SYS_FUNC,		0x10},
@@ -153,7 +153,7 @@ static u8 init_reg[SET_REG_NUM][2] = {
 	{ REG_HW_CON5,		0x83},
 	{ REG_HW_CON6,		0x3f},
 	{ REG_HW_CON7,		0x48},
-	{ REG_HW_CON8,		0x20},
+	/* { REG_HW_CON8,	0x20}, */
 	{ REG_HW_CON10,		0x27},
 	{ REG_HW_CON11,		0x00},
 };
@@ -163,26 +163,25 @@ struct asp01_data {
 	struct device *dev;
 	struct input_dev *input;
 	struct work_struct work; /* for grip sensor */
-#ifdef FEATURE_INIT_TOUCH_OFF
 	struct delayed_work d_work;
-#endif
+	struct delayed_work d_work_initdev;
 	struct mutex data_mutex;
 	atomic_t enable;
 	struct asp01_platform_data *pdata;
 	struct wake_lock gr_wake_lock;
 	u8 cal_data[CAL_DATA_NUM];
 	u8 default_mfm[MFM_DATA_NUM];
-	u16 cr_per[4];
 	int cr_cosnt;
 	int cs_cosnt;
-#ifdef FEATURE_INIT_TOUCH_OFF
-	bool init_touch_off_needed;
+	bool init_touch_needed;
 	bool first_close_check;
 	bool is_first_close;
-#endif
 	bool skip_data;
+	bool skip_jig;
+	bool shutdown;
 };
 
+static int touch_state;
 static int usb_jig_on;
 
 enum {
@@ -199,18 +198,18 @@ extern void muic_attached_accessory_inquire(void);
 static int jig_check(struct notifier_block *self, unsigned long action,
 			void *dev)
 {
-	pr_info("%s : action = %ld\n", __func__, action);
+	pr_info("asp01 %s : action = %ld\n", __func__, action);
 	switch (action) {
-		case CABLE_TYPE2_JIG_UART_OFF_MUIC:
-		case CABLE_TYPE2_JIG_UART_OFF_VB_MUIC:
-		case CABLE_TYPE2_JIG_UART_ON_MUIC:
-		case CABLE_TYPE2_JIG_UART_ON_VB_MUIC:
-			pr_info("%s : jig on! disable grip sensor\n", __func__);
-			usb_jig_on = true;
-		break;
-		default:
-			pr_info("%s : jig off! enable grip sensor\n", __func__);
-			usb_jig_on = false;
+	case CABLE_TYPE2_JIG_UART_OFF_MUIC:
+	case CABLE_TYPE2_JIG_UART_OFF_VB_MUIC:
+	case CABLE_TYPE2_JIG_UART_ON_MUIC:
+	case CABLE_TYPE2_JIG_UART_ON_VB_MUIC:
+		pr_info("asp01 %s : jig on! disable grip sensor\n", __func__);
+		usb_jig_on = true;
+	break;
+	default:
+		pr_info("asp01 %s : jig off! enable grip sensor\n", __func__);
+		usb_jig_on = false;
 	}
 	return NOTIFY_OK;
 }
@@ -219,7 +218,108 @@ static struct notifier_block jig_notify = {
 	.notifier_call =	jig_check,
 };
 
+static int asp01_grip_enable(struct asp01_data *data)
+{
+	int err;
 
+	err = i2c_smbus_write_byte_data(data->client,
+			control_reg[CMD_CLK_ON][REG],
+			control_reg[CMD_CLK_ON][CMD]);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+
+#ifdef GRIP_DEBUG
+	pr_debug("%s: reg: 0x%x, data: 0x%x\n", __func__,
+		control_reg[CMD_CLK_ON][REG],
+		control_reg[CMD_CLK_ON][CMD]);
+#endif
+
+	return err;
+}
+
+static int asp01_grip_disable(struct asp01_data *data)
+{
+	int err, grip;
+	int count = 10;
+
+	err = i2c_smbus_write_byte_data(data->client,
+			REG_SYS_FUNC, 0x14);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+	do {
+		usleep_range(5000, 5100);
+		grip = gpio_get_value(data->pdata->t_out);
+#ifdef GRIP_DEBUG
+		pr_info("%s: grip=%d, count=%d\n",
+			__func__, grip, count);
+#endif
+	} while (!grip && count--);
+
+	err = i2c_smbus_write_byte_data(data->client,
+			control_reg[CMD_CLK_OFF][REG],
+			control_reg[CMD_CLK_OFF][CMD]);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+
+#ifdef GRIP_DEBUG
+	pr_debug("%s: reg: %x, data: %x\n", __func__,
+		control_reg[CMD_CLK_OFF][REG],
+		control_reg[CMD_CLK_OFF][CMD]);
+#endif
+
+	return err;
+}
+
+static void asp01_restore_from_eeprom(struct asp01_data *data)
+{
+	int err;
+
+	err = i2c_smbus_write_byte_data(data->client,
+			REG_EEP_ST_CON, 0x06);
+	if (err) {
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+		return;
+	}
+	usleep_range(6000, 6100);
+}
+
+static void asp01_write_to_eeprom(struct asp01_data *data)
+{
+	int err, count;
+	u8 reg;
+
+	/* write into eeprom */
+	err = i2c_smbus_write_byte_data(data->client,
+			REG_EEP_ST_CON, 0x02);
+	if (err) {
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+		return;
+	}
+	count = 20;
+	do {
+		reg = i2c_smbus_read_byte_data(data->client, REG_EEP_ST_CON);
+		if (reg < 0) {
+			pr_err("%s : i2c read fail, err=%d, %d line\n",
+				__func__, reg, __LINE__);
+			return;
+		}
+		pr_debug("%s: check eeprom reg(0x%x) = 0x%x count=%d\n",
+			__func__, REG_EEP_ST_CON, reg, count);
+		msleep(50);
+	} while ((reg & 0x1) && count--);
+	if (!count)
+		pr_err("%s: use all count! need to check eeprom\n",
+			__func__);
+}
+
+/*
+* Reset will restore data from EEPROM.
+*/
 static int asp01_reset(struct asp01_data *data)
 {
 	int err;
@@ -231,8 +331,7 @@ static int asp01_reset(struct asp01_data *data)
 	if (reg < 0) {
 		pr_err("%s : i2c read fail, err=%d, %d line\n",
 			__func__, reg, __LINE__);
-		err = -EIO;
-		return err;
+		return reg;
 	}
 	err = i2c_smbus_write_byte_data(data->client,
 			control_reg[CMD_RESET][REG],
@@ -243,6 +342,7 @@ static int asp01_reset(struct asp01_data *data)
 			__func__, err, __LINE__);
 		goto done;
 	}
+	pr_info("%s, reset_reg = 0x%x\n", __func__, RESET_MSK & reg);
 	err = i2c_smbus_write_byte_data(data->client,
 			control_reg[CMD_RESET][REG],
 			RESET_MSK & reg);
@@ -251,11 +351,6 @@ static int asp01_reset(struct asp01_data *data)
 			__func__, err, __LINE__);
 		goto done;
 	}
-#ifdef USE_EEPROM
-	msleep(250);
-#else
-	msleep(40);
-#endif
 done:
 	return err;
 }
@@ -264,6 +359,7 @@ static int asp01_init_touch_onoff(struct asp01_data *data, bool onoff)
 {
 	int err;
 
+	pr_info("%s, onoff = %d\n", __func__, onoff);
 	if (onoff) {
 		err = i2c_smbus_write_byte_data(data->client,
 			control_reg[CMD_INIT_TOUCH_ON][REG],
@@ -271,7 +367,6 @@ static int asp01_init_touch_onoff(struct asp01_data *data, bool onoff)
 		if (err) {
 				pr_err("%s: i2c write fail, err=%d, %d line\n",
 					__func__, err, __LINE__);
-				goto done;
 		}
 	} else {
 		err = i2c_smbus_write_byte_data(data->client,
@@ -280,393 +375,57 @@ static int asp01_init_touch_onoff(struct asp01_data *data, bool onoff)
 		if (err) {
 				pr_err("%s: i2c write fail, err=%d, %d line\n",
 					__func__, err, __LINE__);
-				goto done;
 		}
 	}
-done:
 	return err;
 }
 
-static int asp01_init_code_set(struct asp01_data *data, int count)
+/*
+ * asp01_init_code_set will make clk on.
+ */
+static int asp01_init_code_set(struct asp01_data *data)
 {
-	int err, i, j = 0;
-#ifdef GRIP_DEBUG
+	int err, i;
 	u8 reg;
-#endif
 
-#ifdef USE_EEPROM
-	msleep(400);
-#else
-	for (j = 0; j < 20; j++) {/* need to write six time */
-#endif
-		/* clock on */
+	/* write Initial code */
+	for (i = 0; i < SET_REG_NUM; i++) {
 		err = i2c_smbus_write_byte_data(data->client,
-				control_reg[CMD_CLK_ON][REG],
-				control_reg[CMD_CLK_ON][CMD]);
+			init_reg[i][REG], init_reg[i][CMD]);
 		if (err) {
 			pr_err("%s: i2c write fail, err=%d, %d line\n",
 				__func__, err, __LINE__);
 			goto done;
 		}
-
-		/* write Initializing code */
-		for (i = 0; i < SET_REG_NUM; i++) {
-			err = i2c_smbus_write_byte_data(data->client,
-				init_reg[i][REG], init_reg[i][CMD]);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				goto done;
-			}
-			pr_debug("%s: reg: %x, data: %x\n", __func__,
-				init_reg[i][REG], init_reg[i][CMD]);
-		}
-
-		if (!count) {
-			/* disable initial touch mode */
-			asp01_init_touch_onoff(data, false);
-			if (!j)
-				pr_info("%s: cal disable\n", __func__);
-		} else {
-			/* wtire initial touch ref setting */
-			for (i = 0; i < MFM_DATA_NUM; i++) {
-				pr_debug("%s: reg(0x%x) = 0x%x\n", __func__,
-					REG_MFM_INIT_REF0 + i,
-					data->cal_data[i]);
-				err = i2c_smbus_write_byte_data(data->client,
-					REG_MFM_INIT_REF0 + i,
-					data->cal_data[i]);
-				if (err)
-					pr_err("%s: i2c write fail, err=%d, %d line\n",
-						__func__, err, __LINE__);
-			};
-			/* enable initial touch mode */
-			asp01_init_touch_onoff(data, true);
-			if (!j)
-				pr_info("%s: cal enable\n", __func__);
-		}
-		usleep_range(5000, 5100);
-#ifndef USE_EEPROM
+		pr_debug("%s: reg: %x, data: %x\n", __func__,
+			init_reg[i][REG], init_reg[i][CMD]);
 	}
-#endif
-#ifdef GRIP_DEBUG
-	/* verifying register set */
-	for (i = 0; i < SET_REG_NUM; i++) {
-		reg = i2c_smbus_read_byte_data(data->client,
-					 init_reg[i][REG);
-		if (reg < 0) {
-			pr_err("%s : i2c read fail, err=%d, %d line\n",
-				__func__, reg, __LINE__);
-			err = -EIO;
-			return err;
-		}
-		pr_info("%s: reg: %x, data: %x\n", __func__,
-			init_reg[i][REG], reg);
+
+	/* check if the device is working */
+	reg = i2c_smbus_read_byte_data(data->client, 0x10);
+
+	pr_info("%s: reg 0x10 = 0x%x\n", __func__, reg);
+
+	if (reg & 0x02) {
+		pr_info("%s, asp01 is working. do not turn off "\
+			"init touch mode!\n", __func__);
+		return ASP01_DEV_WORKING;
 	}
-#endif
+
+	/* disable initial touch mode */
+	asp01_init_touch_onoff(data, false);
+	msleep(100);
+
 done:
 	return err;
 }
 
-static void asp01_open_calibration(struct asp01_data *data)
+static int asp01_save_caldata(struct asp01_data *data)
 {
 	struct file *cal_filp = NULL;
-	int i;
 	int err = 0;
-	int count = CAL_DATA_NUM;
 	mm_segment_t old_fs;
-#ifdef GRIP_DEBUG
-	u8 reg;
-#endif
 
-	old_fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	cal_filp = filp_open(CALIBRATION_FILE_PATH, O_RDONLY,
-			S_IRUGO | S_IWUSR | S_IWGRP);
-	if (IS_ERR(cal_filp)) {
-		err = PTR_ERR(cal_filp);
-		if (err != -ENOENT)
-			pr_err("%s: Can't open calibration file\n", __func__);
-		else {
-			pr_info("%s: need calibration\n", __func__);
-			/* calibration status init */
-			for (i = 0; i < CAL_DATA_NUM; i++)
-				data->cal_data[i] = 0;
-		}
-		set_fs(old_fs);
-		if (err == -ENOENT)
-			goto set_init_code;
-		else
-			return;
-	}
-
-	err = cal_filp->f_op->read(cal_filp,
-		(char *)data->cal_data,
-		CAL_DATA_NUM * sizeof(u8), &cal_filp->f_pos);
-	if (err != CAL_DATA_NUM * sizeof(u8))
-		pr_err("%s: Can't read the cal data from file\n", __func__);
-
-	filp_close(cal_filp, current->files);
-	set_fs(old_fs);
-
-set_init_code:
-	for (i = 0; i < CAL_DATA_NUM; i++) {
-		if (!data->cal_data[i])
-			count -= 1;
-	}
-
-	mutex_lock(&data->data_mutex);
-
-	err = asp01_reset(data);
-	if (err) {
-		pr_err("%s: asp01_reset, err=%d\n",
-			__func__, err);
-		mutex_unlock(&data->data_mutex);
-		return;
-	}
-#ifdef USE_EEPROM
-	if (!count) {
-#endif
-		err = asp01_init_code_set(data, count);
-		if (err < 0) {
-			pr_err("%s: asp01_init_code_set, err=%d\n",
-				__func__, err);
-			mutex_unlock(&data->data_mutex);
-			return;
-		}
-#ifdef USE_EEPROM
-	} else
-		pr_info("%s: now use eeprom\n", __func__);
-#endif
-#ifdef GRIP_DEBUG
-	/* verifiying MFM value*/
-	for (i = 0; i < MFM_DATA_NUM; i++) {
-		reg = i2c_smbus_read_byte_data(data->client,
-				 REG_MFM_INIT_REF0 + i);
-		if (reg < 0) {
-			pr_err("%s : i2c read fail, err=%d, %d line\n",
-				__func__, reg, __LINE__);
-			err = -EIO;
-			mutex_unlock(&data->data_mutex);
-			return;
-		}
-		pr_info("%s: verify reg(0x%x) = 0x%x\n", __func__,
-			REG_MFM_INIT_REF0 + i, reg);
-	}
-#endif
-	mutex_unlock(&data->data_mutex);
-
-	return;
-}
-
-static int asp01_do_calibrate(struct device *dev, bool do_calib)
-{
-	struct asp01_data *data = dev_get_drvdata(dev);
-	struct file *cal_filp = NULL;
-	int err = 0;
-	int i;
-	int count = 100;
-	u8 reg;
-	u32 cr_ref[4] = {0,};
-	u32 cs_ref[4] = {0,};
-	mm_segment_t old_fs;
-	u16 cr_per[4] = {0,};
-	u32 cr_per_sum = 0;
-	u16 cr_per_avg = 0;
-	bool calibration_success = true;
-
-	pr_info("%s: do_calib=%d\n", __func__, do_calib);
-
-	if (do_calib) {
-		for (i = 0; i < 4; i++) {
-			/* 1. set MFM unmber (MFM0~MFM3)*/
-			err = i2c_smbus_write_byte_data(data->client,
-					REG_SETMFM, i);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				return err;
-			}
-			/* 2. wait until data ready */
-			do {
-				reg = i2c_smbus_read_byte_data(data->client,
-					REG_SETMFM);
-				if (reg < 0) {
-					pr_err("%s : i2c read fail, err=%d, %d line\n",
-						__func__, reg, __LINE__);
-					err = -EIO;
-					return err;
-				}
-				msleep(20);
-				if (reg & SET_MFM_DONE) {
-					pr_info("%s: count is %d\n", __func__,
-						100 - count);
-					count = 100;
-					break;
-				}
-				if (!count)
-					pr_err("%s: full count state\n",
-						__func__);
-			} while (count--);
-
-			/* 3. read each CR CS ref value */
-			err = i2c_smbus_write_byte_data(data->client,
-					control_reg[CMD_CLK_OFF][REG],
-					control_reg[CMD_CLK_OFF][CMD]);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				return err;
-			}
-			err = i2c_smbus_read_i2c_block_data(data->client,
-				REG_CR_REF0, sizeof(u8)*2,
-				&data->cal_data[i * 4]);
-			if (err != sizeof(u8)*2) {
-				pr_err("%s : i2c read fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				err = -EIO;
-				return err;
-			}
-			err = i2c_smbus_read_i2c_block_data(data->client,
-				REG_CS_REF0, sizeof(u8)*2,
-				&data->cal_data[(i * 4) + 2]);
-			if (err != sizeof(u8)*2) {
-				pr_err("%s : i2c read fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				err = -EIO;
-				return err;
-			}
-			cr_ref[i] =
-				(data->cal_data[(i * 4) + 1] << BYTE_SFT
-					| data->cal_data[(i * 4)]);
-			cs_ref[i] =
-				(data->cal_data[(i * 4) + 3] << BYTE_SFT
-					| data->cal_data[(i * 4) + 2]);
-
-			/* 4. multiply cr, cs constant*/
-			/* cs ref x cs cont */
-			cs_ref[i] =
-				(cs_ref[i] * data->cs_cosnt) / DIV;
-			/* cr ref x cr cont */
-			cr_ref[i] =
-				(cr_ref[i] * data->cr_cosnt) / DIV;
-
-			/* 5. separate high low reg of cr cs ref */
-			data->cal_data[(i * 4)] =
-				(u8)(BYTE_MSK & cr_ref[i]);
-
-			data->cal_data[(i * 4) + 1] =
-				(u8)(BYTE_MSK & (cr_ref[i] >> BYTE_SFT));
-
-			data->cal_data[(i * 4) + 2] =
-				(u8)(BYTE_MSK & cs_ref[i]);
-
-			data->cal_data[(i * 4) + 3] =
-				(u8)(BYTE_MSK & (cs_ref[i] >> BYTE_SFT));
-
-			/* 6. read pr percent data */
-			err = i2c_smbus_read_i2c_block_data(data->client,
-			REG_CR_PER_L, sizeof(u8)*2,
-			&data->cal_data[MFM_DATA_NUM + i*2]);
-			if (err != sizeof(u8)*2) {
-				pr_err("%s : i2c read fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				err = -EIO;
-				mutex_unlock(&data->data_mutex);
-				return err;
-			}
-			cr_per[i] =
-				data->cal_data[MFM_DATA_NUM + 1 + i*2] << 8|\
-				data->cal_data[MFM_DATA_NUM + i*2];
-			cr_per_sum += cr_per[i];
-			pr_info("%s, cr percent = %d\n", __func__, cr_per[i]);
-
-			err = i2c_smbus_write_byte_data(data->client,
-				control_reg[CMD_CLK_ON][REG],
-				control_reg[CMD_CLK_ON][CMD]);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				mutex_unlock(&data->data_mutex);
-				return err;
-			}
-		}
-
-		/* Check if cr percent is under 0.5%. */
-		cr_per_avg = (u16)(cr_per_sum / 4);
-		if (cr_per_avg > CAL_CHECK_VAL) {
-			memset(data->cal_data, 0, ARRAY_SIZE(data->cal_data));
-			pr_err("%s, calibeation fail. cr percent avg = %d\n",
-				__func__, cr_per_avg);
-			calibration_success = false;
-		} else
-			pr_info("%s, cr percent avg = %d\n", __func__,
-				cr_per_avg);
-
-		/* write MFM ref value */
-		for (i = 0; i < MFM_DATA_NUM; i++) {
-			err = i2c_smbus_write_byte_data(data->client,
-					REG_MFM_INIT_REF0 + i,
-					data->cal_data[i]);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				return err;
-			}
-			pr_debug("%s: wr reg(0x%x) = 0x%x\n", __func__,
-				REG_MFM_INIT_REF0 + i,
-				data->cal_data[i]);
-		}
-		if (calibration_success) {
-			asp01_init_touch_onoff(data, true);
-			data->init_touch_off_needed = true;
-			pr_info("%s, init_touch_off_needed is set\n", __func__);
-		} else
-			asp01_init_touch_onoff(data, false);
-	} else {
-		/* reset MFM ref value */
-		memset(data->cal_data, 0, ARRAY_SIZE(data->cal_data));
-		for (i = 0; i < MFM_DATA_NUM; i++) {
-			err = i2c_smbus_write_byte_data(data->client,
-					REG_MFM_INIT_REF0 + i, 0);
-			if (err) {
-				pr_err("%s: i2c write fail, err=%d, %d line\n",
-					__func__, err, __LINE__);
-				return err;
-			}
-			pr_debug("%s: reset reg(0x%x) = 0x%x\n", __func__,
-				REG_MFM_INIT_REF0 + i, data->cal_data[i]);
-		}
-		asp01_init_touch_onoff(data, false);
-	}
-
-#ifdef USE_EEPROM
-	/* write into eeprom */
-	err = i2c_smbus_write_byte_data(data->client,
-			REG_EEP_ST_CON, 0x02);
-	if (err) {
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-		return err;
-	}
-	count = 20;
-	do {
-		reg = i2c_smbus_read_byte_data(data->client, REG_EEP_ST_CON);
-		if (reg < 0) {
-			pr_err("%s : i2c read fail, err=%d, %d line\n",
-				__func__, reg, __LINE__);
-			err = -EIO;
-			return err;
-		}
-		pr_debug("%s: check eeprom reg(0x%x) = 0x%x count=%d\n",
-			__func__, REG_EEP_ST_CON, reg, count);
-		msleep(50);
-	} while ((reg & 0x1) && count--);
-	if (!count)
-		pr_err("%s: use all count! need to check eeprom\n",
-			__func__);
-#endif
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 
@@ -694,58 +453,317 @@ static int asp01_do_calibrate(struct device *dev, bool do_calib)
 	return err;
 }
 
-static int asp01_grip_enable(struct asp01_data *data)
+static int asp01_load_caldata(struct asp01_data *data)
 {
-	int err;
+	struct file *cal_filp = NULL;
+	mm_segment_t old_fs;
+	int err = -1, i;
 
-	mutex_lock(&data->data_mutex);
-	err = i2c_smbus_write_byte_data(data->client,
-			control_reg[CMD_CLK_ON][REG],
-			control_reg[CMD_CLK_ON][CMD]);
-	if (err)
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-	mutex_unlock(&data->data_mutex);
+	if (data->shutdown)
+		return err;
 
-#ifdef GRIP_DEBUG
-	pr_debug("%s: reg: %x, data: %x\n", __func__,
-		control_reg[CMD_CLK_ON][REG],
-		control_reg[CMD_CLK_ON][CMD]);
-#endif
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	cal_filp = filp_open(CALIBRATION_FILE_PATH, O_RDONLY,
+			S_IRUGO | S_IWUSR | S_IWGRP);
+	if (IS_ERR(cal_filp)) {
+		err = PTR_ERR(cal_filp);
+		if (err != -ENOENT)
+			pr_err("%s: Can't open calibration file.\n", __func__);
+		else {
+			pr_info("%s: There is no calibration file.\n",
+				__func__);
+			/* calibration status init */
+			for (i = 0; i < CAL_DATA_NUM; i++)
+				data->cal_data[i] = 0;
+		}
+		set_fs(old_fs);
+		return err;
+	}
+
+	err = cal_filp->f_op->read(cal_filp,
+		(char *)data->cal_data,
+		CAL_DATA_NUM * sizeof(u8), &cal_filp->f_pos);
+	if (err != CAL_DATA_NUM * sizeof(u8))
+		pr_err("%s: Can't read the cal data from file\n", __func__);
+
+	filp_close(cal_filp, current->files);
+	set_fs(old_fs);
 
 	return err;
 }
 
-static int asp01_grip_disable(struct asp01_data *data)
+static void asp01_open_calibration(struct asp01_data *data)
 {
-	int err, grip;
-	int count = 10;
-	mutex_lock(&data->data_mutex);
-	err = i2c_smbus_write_byte_data(data->client,
-			REG_SYS_FUNC, 0x14);
-	if (err)
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-	do {
-		usleep_range(5000, 51000);
-		grip = gpio_get_value(data->pdata->t_out);
-		pr_info("%s: grip=%d, count=%d\n",
-			__func__, grip, count);
-	} while (!grip && count--);
+	int i;
+	int err;
+	int count = CAL_DATA_NUM;
+#ifdef GRIP_DEBUG
+	u8 reg;
+#endif
 
-	err = i2c_smbus_write_byte_data(data->client,
-			control_reg[CMD_CLK_OFF][REG],
-			control_reg[CMD_CLK_OFF][CMD]);
-	if (err)
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-	mutex_unlock(&data->data_mutex);
+	err = asp01_load_caldata(data);
+	if (err < 0) {
+		pr_info("%s, load_caldata failed\n", __func__);
+		return;
+	}
+
+	for (i = 0; i < CAL_DATA_NUM; i++) {
+		if (!data->cal_data[i])
+			count -= 1;
+	}
+
+	if (count) {
+		asp01_restore_from_eeprom(data);
+
+		err = asp01_reset(data);
+		if (err) {
+			pr_err("%s: asp01_reset, err=%d\n",
+				__func__, err);
+			return;
+		}
+		msleep(700);
+
+		/* If MFM is not calibrated, count will be zero. */
+		err = asp01_init_code_set(data);
+		if (err < ASP01_DEV_WORKING) {
+			pr_err("%s: asp01_init_code_set, err=%d\n",
+				__func__, err);
+			return;
+		}
+	} else
+		pr_info("%s: There is no cal data.\n", __func__);
 
 #ifdef GRIP_DEBUG
-	pr_debug("%s: reg: %x, data: %x\n", __func__,
-		control_reg[CMD_CLK_OFF][REG],
-		control_reg[CMD_CLK_OFF][CMD]);
+	/* verifiying MFM value*/
+	for (i = 0; i < MFM_DATA_NUM; i++) {
+		reg = i2c_smbus_read_byte_data(data->client,
+				 REG_MFM_INIT_REF0 + i);
+		if (reg < 0) {
+			pr_err("%s : i2c read fail, err=%d, %d line\n",
+				__func__, reg, __LINE__);
+			return;
+		}
+		pr_info("%s: verify reg(0x%x) = 0x%x\n", __func__,
+			REG_MFM_INIT_REF0 + i, reg);
+	}
 #endif
+	return;
+}
+
+static int asp01_do_calibrate(struct asp01_data *data, bool do_calib)
+{
+	int err, i, j;
+	int count = 100, retry_cnt = 0;
+	u8 reg;
+	u32 cr_ref[4] = {0,};
+	u32 cs_ref[4] = {0,};
+	u8 tmp_data[2] = {0,};
+	u16 cs_per[4], cr_per[4];
+
+	pr_info("%s: do_calib=%d\n", __func__, do_calib);
+	if (do_calib) {
+retry:
+		/* 1. To block wrong data write 0x03 to 0x03. */
+		err = i2c_smbus_write_byte_data(data->client,
+				REG_SETMFM, 0x03);
+		if (err) {
+			pr_err("%s: i2c write fail, err=%d, %d line\n",
+				__func__, err, __LINE__);
+			return err;
+		}
+		usleep_range(10000, 11000);
+		for (i = 0; i < 4; i++) {
+			/* 2. Select MFM unmber (MFM0~MFM3)*/
+			err = i2c_smbus_write_byte_data(data->client,
+					REG_SETMFM, i);
+			if (err) {
+				pr_err("%s: i2c write fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return err;
+			}
+			/* 3. wait until data ready */
+			do {
+				reg = i2c_smbus_read_byte_data(data->client,
+					REG_SETMFM);
+				if (reg < 0) {
+					pr_err("%s : i2c read fail, err=%d, %d line\n",
+						__func__, reg, __LINE__);
+					return reg;
+				}
+				usleep_range(1000, 1100);
+				if (reg & SET_MFM_DONE) {
+					pr_info("%s: count is %d\n", __func__,
+						100 - count);
+					count = 100;
+					break;
+				}
+				if (!count)
+					pr_err("%s: full count state\n",
+						__func__);
+			} while (count--);
+
+			/* 4. read each CR CS ref value */
+			err = i2c_smbus_write_byte_data(data->client,
+					control_reg[CMD_CLK_OFF][REG],
+					control_reg[CMD_CLK_OFF][CMD]);
+			if (err) {
+				pr_err("%s: i2c write fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return err;
+			}
+			err = i2c_smbus_read_i2c_block_data(data->client,
+				REG_CR_REF0, sizeof(u8)*2,
+				&data->cal_data[i * 4]);
+			if (err != sizeof(u8)*2) {
+				pr_err("%s : i2c read fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return -EIO;
+			}
+			err = i2c_smbus_read_i2c_block_data(data->client,
+				REG_CS_REF0, sizeof(u8)*2,
+				&data->cal_data[(i * 4) + 2]);
+			if (err != sizeof(u8)*2) {
+				pr_err("%s : i2c read fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return -EIO;
+			}
+			cr_ref[i] =
+				(data->cal_data[(i * 4) + 1] << BYTE_SFT
+					| data->cal_data[(i * 4)]);
+			cs_ref[i] =
+				(data->cal_data[(i * 4) + 3] << BYTE_SFT
+					| data->cal_data[(i * 4) + 2]);
+
+			/* 5. multiply cr, cs constant */
+			/* cs ref x cs cont */
+			cs_ref[i] =
+				(cs_ref[i] * data->cs_cosnt) / DIV;
+			pr_info("%s, cs_ref[%d] = %d\n", __func__, i,
+				cs_ref[i]);
+			/* cr ref x cr cont */
+			cr_ref[i] =
+				(cr_ref[i] * data->cr_cosnt) / DIV;
+			pr_info("%s, cr_ref[%d] = %d\n", __func__, i,
+				cr_ref[i]);
+
+			/* 6. separate high low reg of cr cs ref */
+			data->cal_data[(i * 4)] =
+				(u8)(BYTE_MSK & cr_ref[i]);
+
+			data->cal_data[(i * 4) + 1] =
+				(u8)(BYTE_MSK & (cr_ref[i] >> BYTE_SFT));
+
+			data->cal_data[(i * 4) + 2] =
+				(u8)(BYTE_MSK & cs_ref[i]);
+
+			data->cal_data[(i * 4) + 3] =
+				(u8)(BYTE_MSK & (cs_ref[i] >> BYTE_SFT));
+
+			/* 7. read CS, CR percent value */
+			err = i2c_smbus_read_i2c_block_data(data->client,
+				REG_CS_PERL, sizeof(u8)*2,
+				tmp_data);
+			if (err != sizeof(u8)*2) {
+				pr_err("%s : i2c read fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return -EIO;
+			}
+
+			cs_per[i] = (tmp_data[1] << 8) | tmp_data[0];
+			pr_info("%s, cs : %d\n", __func__, cs_per[i]);
+
+			err = i2c_smbus_read_i2c_block_data(data->client,
+				REG_CR_PER_L, sizeof(u8)*2,
+				tmp_data);
+			if (err != sizeof(u8)*2) {
+				pr_err("%s :i2c read fail. err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return -EIO;
+			}
+			cr_per[i] = (tmp_data[1] << 8) | tmp_data[0];
+			pr_info("%s, cr : %d\n", __func__, cr_per[i]);
+
+			err = i2c_smbus_write_byte_data(data->client,
+				control_reg[CMD_CLK_ON][REG],
+				control_reg[CMD_CLK_ON][CMD]);
+			if (err) {
+				pr_err("%s: i2c write fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return err;
+			}
+		}
+
+		/* 8. Check if 2nd cs, cr values are less than 0.5%(40) */
+		/* find 2nd minimum values */
+		for (i = 0; i < 2; i++) {
+			for (j = i + 1; j < 4; j++) {
+				if (cs_per[i] > cs_per[j])
+					swap(cs_per[i], cs_per[j]);
+				if (cr_per[i] > cr_per[j])
+					swap(cr_per[i], cr_per[j]);
+			}
+		}
+
+		if (cs_per[1] > CAL_CHECK_VAL ||
+			cr_per[1] > CAL_CHECK_VAL) {
+			pr_info("%s, calibration fail. cs_2nd = %d, cr_2nd = %d(%d)\n",
+				__func__, cs_per[1], cr_per[1], retry_cnt);
+			if (++retry_cnt < 3) {
+				count = 100;
+				goto retry;
+			}
+			return ASP01_WRONG_RANGE;
+		} else {
+			pr_info("%s, cs_2nd = %d, cr_2nd = %d\n", __func__,
+				cs_per[1], cr_per[1]);
+			/* save avg cs, cr percent */
+			data->cal_data[MFM_DATA_NUM] =
+				(u8)(cs_per[1] & BYTE_MSK);
+			data->cal_data[MFM_DATA_NUM + 1] =
+				(u8)(cs_per[1] >> BYTE_SFT & BYTE_MSK);
+			data->cal_data[MFM_DATA_NUM + 2] =
+				(u8)(cr_per[1] & BYTE_MSK);
+			data->cal_data[MFM_DATA_NUM + 3] =
+				(u8)(cr_per[1] >> BYTE_SFT & BYTE_MSK);
+		}
+
+		/* 9. write MFM ref value */
+		for (i = 0; i < MFM_DATA_NUM; i++) {
+			err = i2c_smbus_write_byte_data(data->client,
+					REG_MFM_INIT_REF0 + i,
+					data->cal_data[i]);
+			if (err) {
+				pr_err("%s: i2c write fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return err;
+			}
+			pr_debug("%s: wr reg(0x%x) = 0x%x\n", __func__,
+				REG_MFM_INIT_REF0 + i,
+				data->cal_data[i]);
+		}
+		asp01_init_touch_onoff(data, true);
+		asp01_write_to_eeprom(data);
+		asp01_init_touch_onoff(data, false);
+		pr_info("%s, init_touch_needed is set\n", __func__);
+	} else {
+		/* reset MFM ref value */
+		memset(data->cal_data, 0, ARRAY_SIZE(data->cal_data));
+		for (i = 0; i < MFM_DATA_NUM; i++) {
+			err = i2c_smbus_write_byte_data(data->client,
+					REG_MFM_INIT_REF0 + i, 0);
+			if (err) {
+				pr_err("%s: i2c write fail, err=%d, %d line\n",
+					__func__, err, __LINE__);
+				return err;
+			}
+			pr_debug("%s: reset reg(0x%x) = 0x%x\n", __func__,
+				REG_MFM_INIT_REF0 + i, data->cal_data[i]);
+		}
+		data->init_touch_needed = false;
+		asp01_write_to_eeprom(data);
+	}
 
 	return err;
 }
@@ -773,14 +791,13 @@ static int asp01_suspend(struct device *dev)
 
 static int asp01_resume(struct device *dev)
 {
-	int err = 0;
 	struct asp01_data *data = dev_get_drvdata(dev);
 
 	pr_info("%s, enable = %d\n", __func__, atomic_read(&data->enable));
 	if (atomic_read(&data->enable))
 		disable_irq_wake(data->pdata->irq);
 
-	return err;
+	return 0;
 }
 
 static const struct dev_pm_ops asp01_pm_ops = {
@@ -808,37 +825,47 @@ static ssize_t asp01_enable_store(struct device *dev,
 	static bool isFirst = true;
 	int touch, jig_on;
 
+	if (data->shutdown)
+		return -ENXIO;
+
 	if (kstrtoul(buf, 10, &enable))
 		return -EINVAL;
 
+	mutex_lock(&data->data_mutex);
 	if (enable && !atomic_read(&data->enable)) {
 		if (isFirst) {
-			asp01_open_calibration(data);
+			data->init_touch_needed = true;
 			isFirst = false;
-#ifdef FEATURE_INIT_TOUCH_OFF
-			data->init_touch_off_needed = true;
-			pr_info("%s, init_touch_off_needed is set\n", __func__);
-#endif
 		}
-#ifdef FEATURE_INIT_TOUCH_OFF
-		if (data->init_touch_off_needed) {
+
+		err = asp01_grip_enable(data);
+		if (err < 0) {
+			mutex_unlock(&data->data_mutex);
+			goto done;
+		}
+		/* turn on time is needed. */
+		usleep_range(10000, 11000);
+
+		if (data->init_touch_needed) {
+			asp01_open_calibration(data);
 			data->first_close_check = true;
 			pr_info("%s, first_close_check is set\n", __func__);
 		}
-#endif
-		err = asp01_grip_enable(data);
-		if (err < 0)
-			goto done;
-		/* turn on time is needed. */
-		msleep(250);
 
-		jig_on = usb_jig_on;
-		/* gpio jig check 
-		jig_on = gpio_get_value(data->pdata->adj_det);
-		*/
+		if (data->shutdown) {
+			mutex_unlock(&data->data_mutex);
+			return -ENXIO;
+		}
+
+		if (data->skip_jig) {
+			jig_on = 0;
+			pr_info("%s : skip jig check\n", __func__);
+		} else
+			jig_on = usb_jig_on;
+
 		touch = gpio_get_value(data->pdata->t_out);
 		if (!jig_on && !data->skip_data) {
-			pr_info("%s: touch INT : %d!!\n", __func__, touch);
+			pr_info("%s: grip INT : %d!!\n", __func__, touch);
 			input_report_rel(data->input, REL_MISC,
 				(touch ? GRIP_FAR : GRIP_CLOSE));
 			input_sync(data->input);
@@ -847,23 +874,24 @@ static ssize_t asp01_enable_store(struct device *dev,
 			__func__, jig_on, data->skip_data);
 
 		enable_irq(data->pdata->irq);
-#ifdef FEATURE_INIT_TOUCH_OFF
-		if (data->init_touch_off_needed)
+		if (data->init_touch_needed)
 			schedule_delayed_work(&data->d_work,
 				msecs_to_jiffies(700));
-#endif
 	} else if (!enable && atomic_read(&data->enable)) {
-#ifdef FEATURE_INIT_TOUCH_OFF
+		if (data->is_first_close == true)
+			data->init_touch_needed = true;
 		cancel_delayed_work_sync(&data->d_work);
-#endif
 		disable_irq(data->pdata->irq);
 		err = asp01_grip_disable(data);
-		if (err < 0)
+		if (err < 0) {
+			mutex_unlock(&data->data_mutex);
 			goto done;
+		}
 	} else
 		pr_err("%s: Invalid enable status\n", __func__);
 
 	atomic_set(&data->enable, enable);
+	mutex_unlock(&data->data_mutex);
 	pr_info("%s, enable = %ld\n", __func__, enable);
 done:
 	return count;
@@ -883,7 +911,8 @@ static struct attribute_group asp01_attribute_group = {
 
 static void asp01_work_func(struct work_struct *work)
 {
-	int touch, jig_on;
+	int touch, jig_on, err;
+	static int touch_count;
 	struct asp01_data *data
 		= container_of(work, struct asp01_data, work);
 
@@ -893,14 +922,47 @@ static void asp01_work_func(struct work_struct *work)
 		pr_err("%s: can't get pdata\n", __func__);
 		goto done;
 	}
-	jig_on = usb_jig_on;
 	/* gpio_get_value returns 256, when the pin is high */
-	/* gpio jig check 
-	jig_on = gpio_get_value(data->pdata->adj_det);
-	*/
+	if (data->skip_jig) {
+		jig_on = 0;
+		pr_info("%s : skip jig check\n", __func__);
+	} else
+		jig_on = usb_jig_on;
+
 	touch = gpio_get_value(data->pdata->t_out);
-#ifdef FEATURE_INIT_TOUCH_OFF
-	if (data->init_touch_off_needed) {
+
+	if (touch_state == touch) {
+		pr_info("%s : same state, old = %d, new = %d\n", __func__,
+			touch_state, touch);
+		touch_count++;
+	} else
+		touch_count = 0;
+
+	if (touch_count > 3) {
+		pr_info("%s : abnormal state, grip reset", __func__);
+		mutex_lock(&data->data_mutex);
+		err = asp01_reset(data);
+		if (err) {
+			pr_err("%s: asp01_reset, err=%d\n",
+				__func__, err);
+		}
+		msleep(700);
+
+		/* If MFM is not calibrated, count will be zero. */
+		err = asp01_init_code_set(data);
+		if (err < ASP01_DEV_WORKING) {
+			pr_err("%s: asp01_init_code_set, err=%d\n",
+				__func__, err);
+		}
+
+		mutex_unlock(&data->data_mutex);
+		touch_count = 0;
+		touch = gpio_get_value(data->pdata->t_out);
+	}
+
+	touch_state = touch;
+
+	if (data->init_touch_needed) {
 		if (!touch && data->first_close_check) {
 			data->is_first_close = true;
 			data->first_close_check = false;
@@ -909,21 +971,30 @@ static void asp01_work_func(struct work_struct *work)
 
 		if (touch && data->is_first_close) {
 			data->is_first_close = false;
-			data->init_touch_off_needed = false;
+			data->init_touch_needed = false;
 			asp01_init_touch_onoff(data, false);
 			pr_info("%s: init touch off\n", __func__);
 		} else
-			pr_info("%s: skipped init touch off\n", __func__);
+			pr_info("%s: skip init touch off\n", __func__);
+	} else {
+		/* To avoid reset(chip internal) by CR ERR mode,
+		 * enable init touch mode
+		 * CR ERR mode off is the only difference from normal mode
+		 */
+		if (!touch)
+			asp01_init_touch_onoff(data, true);
+		if (touch)
+			asp01_init_touch_onoff(data, false);
 	}
-#endif
-	/* check adj_det pin & skip data cmd for factory test */
+
+	/* check usb jig & skip data cmd for factory test */
 	if (!jig_on && !data->skip_data) {
 		pr_info("%s: touch INT : %d!!\n", __func__, touch);
 		input_report_rel(data->input, REL_MISC,
 			(touch ? GRIP_FAR : GRIP_CLOSE));
 		input_sync(data->input);
 	} else
-		pr_info("%s: skipped input report jig_on: %d, skip cmd: %d\n",
+		pr_info("%s: skip input report jig_on: %d, skip cmd: %d\n",
 			__func__, jig_on, data->skip_data);
 done:
 	enable_irq(data->pdata->irq);
@@ -939,39 +1010,32 @@ static irqreturn_t asp01_irq_thread(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
-#ifdef FEATURE_INIT_TOUCH_OFF
 static void asp01_delay_work_func(struct work_struct *work)
 {
-	int err = 0;
 	struct asp01_data *data
 		= container_of(work, struct asp01_data, d_work.work);
 
 	/* disable initial touch mode */
-	if (data->init_touch_off_needed && !data->is_first_close) {
-		data->init_touch_off_needed = false;
+	if (data->init_touch_needed && !data->is_first_close) {
+		data->init_touch_needed = false;
 		data->first_close_check = false;
-		err = asp01_init_touch_onoff(data, false);
-		if (err)
-			pr_err("%s: failed to write, err=%d\n",
-				__func__, err);
+		asp01_init_touch_onoff(data, false);
 		pr_info("%s: disable init touch mode\n", __func__);
 	} else
 		pr_info("%s: skip disable init touch mode\n", __func__);
 }
-#endif
 
 static ssize_t asp01_calibration_show(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
 {
 	struct asp01_data *data = dev_get_drvdata(dev);
-	int err = -1;
-	int i;
-	int count = MFM_REF_NUM;
-	u16 cr_per[4] = {0,};
+	int success = ASP01_WRONG_RANGE, i, count = MFM_REF_NUM;
+	u16 cs_per_2nd, cr_per_2nd;
 	u16 mfm_ref[MFM_REF_NUM];
 
-	asp01_open_calibration(data);
+	if (asp01_load_caldata(data) < 0)
+		pr_err("%s, load caldata failed\n", __func__);
 
 	for (i = 0; i < MFM_REF_NUM; i++) {
 		mfm_ref[i] =
@@ -981,17 +1045,18 @@ static ssize_t asp01_calibration_show(struct device *dev,
 			count -= 1;
 	}
 
-	/* If MFM is not calibrated. */
-	if (count) {
-		err = 1;
-		for (i = 0; i < 4; i++)
-			cr_per[i] =
-				data->cal_data[MFM_DATA_NUM + 1 + i*2] << 8 |\
-				data->cal_data[MFM_DATA_NUM + i*2];
-	}
+	/* If MFM is not calibrated, count will be zero. */
+	if (count)
+		success = 1;
 
-	return sprintf(buf, "%d, %d, %d, %d, %d\n",
-		err, cr_per[0], cr_per[1], cr_per[2], cr_per[3]);
+	cs_per_2nd = data->cal_data[MFM_DATA_NUM + 1] << 8 |\
+		data->cal_data[MFM_DATA_NUM];
+	cr_per_2nd = data->cal_data[MFM_DATA_NUM + 3] << 8 |\
+		data->cal_data[MFM_DATA_NUM + 2];
+	pr_info("%s, count = %d, cs : %d, cr : %d\n", __func__,
+		count, cs_per_2nd, cr_per_2nd);
+
+	return sprintf(buf, "%d, %d, %d\n", success, cs_per_2nd, cr_per_2nd);
 }
 
 static ssize_t asp01_calibration_store(struct device *dev,
@@ -1001,6 +1066,7 @@ static ssize_t asp01_calibration_store(struct device *dev,
 	int err;
 	bool do_calib;
 	struct asp01_data *data = dev_get_drvdata(dev);
+	u8 tmp_reg;
 
 	if (sysfs_streq(buf, "1"))
 		do_calib = true;
@@ -1011,20 +1077,64 @@ static ssize_t asp01_calibration_store(struct device *dev,
 		return -EINVAL;
 	}
 
+	pr_info("%s, do_calib = %d\n", __func__, do_calib);
 	mutex_lock(&data->data_mutex);
 
-	asp01_reset(data);
-	/* write init code with disable init touch (0)*/
-	asp01_init_code_set(data, 0);
+	if (!atomic_read(&data->enable))
+		asp01_grip_enable(data);
 
-	err = asp01_do_calibrate(dev, do_calib);
+	usleep_range(10000, 11000);
+
+	/* check if the device is working */
+	tmp_reg = i2c_smbus_read_byte_data(data->client,
+		0x10);
+	pr_info("%s: reg 0x10 = 0x%x\n",
+		__func__, tmp_reg);
+	if (tmp_reg & 0x02) {
+		if (do_calib)
+			pr_info("%s, asp01 is working. calibration fail\n",
+				__func__);
+		else
+			pr_info("%s, asp01 is working. cal erase fail\n",
+				__func__);
+		err = ASP01_DEV_WORKING;
+		goto exit;
+	}
+
+	asp01_restore_from_eeprom(data);
+
+	err = asp01_reset(data);
+	if (err < 0) {
+		pr_err("%s, asp01_reset fail(%d)\n", __func__, err);
+		goto exit;
+	}
+	msleep(700);
+
+	err = asp01_init_code_set(data);
+	if (err < ASP01_DEV_WORKING) {
+		pr_err("%s, asp01_init_code_set fail(%d)\n", __func__, err);
+		goto exit;
+	}
+
+	err = asp01_do_calibrate(data, do_calib);
+	if (err < 0) {
+		pr_err("%s, asp01_do_calibrate fail(%d)\n", __func__, err);
+		goto exit;
+	}
+
+	err = asp01_save_caldata(data);
+	if (err < 0) {
+		pr_err("%s, asp01_save_caldata fail(%d)\n", __func__, err);
+		goto exit;
+	}
+exit:
+	if (!atomic_read(&data->enable))
+		asp01_grip_disable(data);
 
 	mutex_unlock(&data->data_mutex);
 
-	if (err < 0) {
-		pr_err("%s: asp01_do_calibrate() failed\n", __func__);
-		return err;
-	}
+	if (err >= 0)
+		pr_info("%s, do_calib = %d done\n", __func__, do_calib);
 
 	return count;
 }
@@ -1055,16 +1165,27 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 	u8 cr_per[2] = {0,};
 	u16 mlt_cs_per[4] = {0,};
 	u16 mlt_cr_per[4] = {0,};
+	u16 line_up_cs_per[4];
+	u16 line_up_cr_per[4];
 	int count = 100;
-	int err, i;
+	int err, i, j;
 	struct asp01_data *data = dev_get_drvdata(dev);
 
+	mutex_lock(&data->data_mutex);
 	if (!atomic_read(&data->enable)) {
 		asp01_grip_enable(data);
 		usleep_range(10000, 11000);
 	}
 
-	mutex_lock(&data->data_mutex);
+	err = i2c_smbus_write_byte_data(data->client,
+				REG_SETMFM, 0x03);
+	if (err) {
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+		mutex_unlock(&data->data_mutex);
+		return err;
+	}
+	usleep_range(10000, 11000);
 	for (i = 0; i < 4; i++) {
 		/* 1. set MFM unmber (MFM0~MFM3)*/
 		err = i2c_smbus_write_byte_data(data->client,
@@ -1082,11 +1203,10 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 			if (reg < 0) {
 				pr_err("%s : i2c read fail, err=%d, %d line\n",
 					__func__, reg, __LINE__);
-				err = -EIO;
 				mutex_unlock(&data->data_mutex);
-				return err;
+				return reg;
 			}
-			usleep_range(10000, 11000);
+			usleep_range(1000, 1100);
 			if (reg & SET_MFM_DONE) {
 				pr_debug("%s: count is %d\n", __func__,
 					100 - count);
@@ -1113,9 +1233,8 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 		if (err != sizeof(reg)*2) {
 			pr_err("%s : i2c read fail, err=%d, %d line\n",
 				__func__, err, __LINE__);
-			err = -EIO;
 			mutex_unlock(&data->data_mutex);
-			return err;
+			return -EIO;
 		}
 
 		mlt_cs_per[i] = (cs_per[1] << 8) | cs_per[0];
@@ -1126,9 +1245,8 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 		if (err != sizeof(reg)*2) {
 			pr_err("%s :i2c read fail. err=%d, %d line\n",
 				__func__, err, __LINE__);
-			err = -EIO;
 			mutex_unlock(&data->data_mutex);
-			return err;
+			return -EIO;
 		}
 		err = i2c_smbus_write_byte_data(data->client,
 				control_reg[CMD_CLK_ON][REG],
@@ -1139,16 +1257,15 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 			mutex_unlock(&data->data_mutex);
 			return err;
 		}
-		data->cr_per[i] =
-			mlt_cr_per[i] = (cr_per[1] << 8) | cr_per[0];
+		mlt_cr_per[i] = (cr_per[1] << 8) | cr_per[0];
 	}
-	mutex_unlock(&data->data_mutex);
 
 #ifdef GRIP_DEBUG
 		for (i = 0; i < SET_REG_NUM; i++) {
 			reg = i2c_smbus_read_byte_data(data->client,
 					 init_reg[i][REG]);
 			if (reg < 0) {
+				mutex_unlock(&data->data_mutex);
 				pr_err("%s : i2c read fail, err=%d, %d line\n",
 					__func__, reg, __LINE__);
 				return reg;
@@ -1157,11 +1274,12 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 				__func__,
 				init_reg[i][REG], reg, init_reg[i][CMD]);
 		}
-		/* verifiying MFM value*/
+		/* verifiying MFM value */
 		for (i = 0; i < MFM_DATA_NUM; i++) {
 			reg = i2c_smbus_read_byte_data(data->client,
 					 REG_MFM_INIT_REF0 + i);
 			if (reg < 0) {
+				mutex_unlock(&data->data_mutex);
 				pr_err("%s : i2c read fail, err=%d, %d line\n",
 					__func__, reg, __LINE__);
 				return reg;
@@ -1171,13 +1289,30 @@ static ssize_t asp01_grip_raw_data_show(struct device *dev,
 				reg, data->cal_data[i]);
 		}
 #endif
-
 	if (!atomic_read(&data->enable))
 		asp01_grip_disable(data);
+	mutex_unlock(&data->data_mutex);
 
-	return sprintf(buf, "%d,%d,%d,%d,%d,%d,%d,%d\n",
-		mlt_cs_per[0], mlt_cs_per[1], mlt_cs_per[2], mlt_cs_per[3],
-		mlt_cr_per[0], mlt_cr_per[1], mlt_cr_per[2], mlt_cr_per[3]);
+	for (i = 0; i < 4; i++) {
+		line_up_cs_per[i] = mlt_cs_per[i];
+		line_up_cr_per[i] = mlt_cr_per[i];
+	}
+
+	/* find 2nd minimum values */
+	for (i = 0; i < 2; i++) {
+		for (j = i + 1; j < 4; j++) {
+			if (line_up_cs_per[i] > line_up_cs_per[j])
+				swap(line_up_cs_per[i], line_up_cs_per[j]);
+			if (line_up_cr_per[i] > line_up_cr_per[j])
+				swap(line_up_cr_per[i], line_up_cr_per[j]);
+		}
+	}
+
+	return sprintf(buf, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",\
+		mlt_cs_per[0], mlt_cs_per[1], mlt_cs_per[2], mlt_cs_per[3],\
+		line_up_cs_per[1],\
+		mlt_cr_per[0], mlt_cr_per[1], mlt_cr_per[2], mlt_cr_per[3],\
+		line_up_cr_per[1]);
 }
 static DEVICE_ATTR(raw_data, S_IRUGO,
 	asp01_grip_raw_data_show, NULL);
@@ -1215,8 +1350,7 @@ static ssize_t asp01_grip_check_crcs_show(struct device *dev,
 			if (reg < 0) {
 				pr_err("%s : i2c read fail, err=%d, %d line\n",
 					__func__, reg, __LINE__);
-				err = -EIO;
-				return err;
+				return reg;
 			}
 			usleep_range(10000, 11000);
 			if (reg & SET_MFM_DONE) {
@@ -1238,8 +1372,7 @@ static ssize_t asp01_grip_check_crcs_show(struct device *dev,
 					__func__,
 					crcs[(12 * i) + j - REG_CR_CNT],
 					__LINE__);
-				err = -EIO;
-				return err;
+				return -EIO;
 			}
 			pr_info("%s: SEL %d, reg (0x%x) = 0x%x",
 				__func__, i, j,
@@ -1269,7 +1402,8 @@ static ssize_t asp01_grip_onoff_show(struct device *dev,
 {
 	struct asp01_data *data = dev_get_drvdata(dev);
 
-	pr_info("%s, onoff = %d\n", __func__, !data->skip_data);
+	pr_info("%s, onoff = %d, skip jig = %d\n", __func__,
+		!data->skip_data, data->skip_jig);
 
 	return sprintf(buf, "%d\n", !data->skip_data);
 }
@@ -1282,13 +1416,22 @@ static ssize_t asp01_grip_onoff_store(struct device *dev,
 
 	if (sysfs_streq(buf, "1"))
 		data->skip_data = false;
-	else if (sysfs_streq(buf, "0"))
+	else if (sysfs_streq(buf, "0")) {
+		input_report_rel(data->input, REL_MISC, GRIP_FAR);
+		input_sync(data->input);
 		data->skip_data = true;
+		pr_info("%s: onoff = 0, input report as GRIP_FAR\n",
+			__func__);
+	} else if (sysfs_streq(buf, "3"))
+		data->skip_jig = false;
+	else if (sysfs_streq(buf, "2"))
+		data->skip_jig = true;
 	else {
 		pr_info("%s: invalid value %d\n", __func__, *buf);
 		return -EINVAL;
 	}
-	pr_info("%s, onoff = %d\n", __func__, !data->skip_data);
+	pr_info("%s, onoff = %d, skip jig = %d\n", __func__,
+		!data->skip_data, data->skip_jig);
 
 	return count;
 }
@@ -1301,39 +1444,40 @@ static ssize_t asp01_grip_reset_store(struct device *dev,
 					const char *buf, size_t count)
 {
 	struct asp01_data *data = dev_get_drvdata(dev);
-	int err = 0;
+	int err;
 
 	if (sysfs_streq(buf, "1")) {
 		pr_info("%s is called\n", __func__);
-		if (atomic_read(&data->enable)) {
-			disable_irq(data->pdata->irq);
-			err = asp01_grip_disable(data);
-			if (err < 0)
-				pr_err("%s: diable fail(%d)\n", __func__, err);
-			msleep(250);
-		}
 
 		mutex_lock(&data->data_mutex);
+		if (atomic_read(&data->enable)) {
+			disable_irq(data->pdata->irq);
+		} else {
+			asp01_grip_enable(data);
+			usleep_range(10000, 11000);
+		}
+
+		asp01_restore_from_eeprom(data);
+
 		err = asp01_reset(data);
 		if (err) {
 			pr_err("%s: asp01_reset, err = %d\n",
 				__func__, err);
 		}
+		msleep(700);
 
-		err = asp01_init_code_set(data, 0);
-		if (err < 0) {
+		err = asp01_init_code_set(data);
+		msleep(100);
+		if (err < ASP01_DEV_WORKING)
 			pr_err("%s: asp01_init_code_set, err = %d\n",
 				__func__, err);
-		}
+		if (atomic_read(&data->enable))
+			enable_irq(data->pdata->irq);
+		else
+			asp01_grip_disable(data);
 		mutex_unlock(&data->data_mutex);
 
-		if (atomic_read(&data->enable)) {
-			err = asp01_grip_enable(data);
-			if (err < 0)
-				pr_err("%s: enable fail(%d)\n", __func__, err);
-			msleep(250);
-			enable_irq(data->pdata->irq);
-		}
+		data->init_touch_needed = true;
 	} else {
 		pr_err("%s: invalid value %d\n", __func__, *buf);
 	}
@@ -1363,7 +1507,7 @@ static ssize_t asp01_grip_cscr_const_store(struct device *dev,
 	sscanf(buf, "%d %d %d %d",
 		&cs_divnd, &cs_divsr, &cr_divnd, &cr_divsr);
 
-	if (cs_divsr && cs_divsr) {
+	if (cs_divsr && cr_divsr) {
 		data->cs_cosnt = (cs_divnd * DIV) / cs_divsr;
 		data->cr_cosnt = (cr_divnd * DIV) / cr_divsr;
 	}
@@ -1372,10 +1516,119 @@ static ssize_t asp01_grip_cscr_const_store(struct device *dev,
 static DEVICE_ATTR(cscr_const, S_IRUGO | S_IWUSR | S_IWGRP,
 		   asp01_grip_cscr_const_show, asp01_grip_cscr_const_store);
 
+static ssize_t asp01_reg_debug_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct asp01_data *data = dev_get_drvdata(dev);
+	u8 tmp_data[12];
+	u16 reg_data[6];
+	int i;
+
+	/* 0x04 ~ 0x0F */
+	i2c_smbus_read_i2c_block_data(data->client,
+		REG_CR_CNT, sizeof(u8)*12, tmp_data);
+
+	for (i = 0; i < 6; i++) {
+		reg_data[i] = (u16)(tmp_data[i * 2] | tmp_data[i * 2 + 1] << 8);
+		pr_info("%s, reg_data[%d] = %d\n", __func__, 4 + i * 2,
+			reg_data[i]);
+	}
+
+	/* 0x23 */
+	tmp_data[0] = i2c_smbus_read_byte_data(data->client, REG_SYS_FUNC);
+	pr_info("%s, sys_func = 0x%x\n", __func__, tmp_data[0]);
+
+	/* 0x1F */
+	tmp_data[0] = i2c_smbus_read_byte_data(data->client, REG_INIT_REF);
+	pr_info("%s, init_ref = 0x%x\n", __func__, tmp_data[0]);
+
+	return sprintf(buf, "0x%x,0x%x,0x%x,0x%x,0x%x,0x%x\n",
+		reg_data[0], reg_data[1], reg_data[2], reg_data[3],
+		reg_data[4], reg_data[5]);
+}
+static DEVICE_ATTR(reg_debug, S_IRUGO,
+		   asp01_reg_debug_show, NULL);
+
+static void asp01_apply_3v3_set(struct asp01_data *data)
+{
+	u8 reg;
+
+	reg = i2c_smbus_read_byte_data(data->client, REG_HW_CON4);
+	init_reg[SET_HW_CON4][CMD] = (reg & 0xf0) | 0x09;
+
+	/* 3.3V init code check */
+	reg = i2c_smbus_read_byte_data(data->client, REG_HW_CON7);
+	if (reg == 0x48)
+		return;
+
+	init_reg[SET_HW_CON7][CMD] = 0x48;
+}
+
+static ssize_t asp01_erase_cal_store(struct device *dev,
+					struct device_attribute *attr,
+					const char *buf, size_t count)
+{
+	struct asp01_data *data = dev_get_drvdata(dev);
+	int err, i;
+
+	if (sysfs_streq(buf, "1")) {
+		pr_info("%s is called\n", __func__);
+	mutex_lock(&data->data_mutex);
+
+	asp01_grip_enable(data);
+	usleep_range(10000, 11000);
+	asp01_restore_from_eeprom(data);
+
+	err = asp01_reset(data);
+	if (err)
+		pr_err("%s: asp01_reset, err = %d\n",
+			__func__, err);
+
+	msleep(700);
+
+	err = asp01_init_code_set(data);
+	if (err < ASP01_DEV_WORKING)
+		pr_err("%s: asp01_init_code_set, err = %d\n",
+			__func__, err);
+
+	/* reset MFM ref value */
+	memset(data->cal_data, 0, ARRAY_SIZE(data->cal_data));
+	for (i = 0; i < MFM_DATA_NUM; i++) {
+		err = i2c_smbus_write_byte_data(data->client,
+				REG_MFM_INIT_REF0 + i, 0);
+		if (err) {
+			pr_err("%s: i2c write fail, err=%d, %d line\n",
+				__func__, err, __LINE__);
+			goto exit;
+		}
+		pr_debug("%s: reset reg(0x%x) = 0x%x\n", __func__,
+			REG_MFM_INIT_REF0 + i, data->cal_data[i]);
+	}
+	data->init_touch_needed = false;
+	asp01_init_touch_onoff(data, false);
+	asp01_write_to_eeprom(data);
+
+	err = asp01_save_caldata(data);
+	if (err < 0) {
+		pr_err("%s, asp01_save_caldata fail(%d)\n",
+			__func__, err);
+	}
+exit:
+	asp01_grip_disable(data);
+	mutex_unlock(&data->data_mutex);
+	} else {
+		pr_err("%s: invalid value %d\n", __func__, *buf);
+	}
+
+	return count;
+}
+static DEVICE_ATTR(erase_cal, S_IWUSR | S_IWGRP,
+		   NULL, asp01_erase_cal_store);
+
 static int asp01_apply_hw_dep_set(struct asp01_data *data)
 {
 	u8 reg, reg_prom_en1, i;
-	u8 reg_hwcon10, reg_hwcon6;
 	int err = 0;
 
 	if (data->pdata == NULL) {
@@ -1402,12 +1655,12 @@ static int asp01_apply_hw_dep_set(struct asp01_data *data)
 		if (reg < 0) {
 			pr_err("%s : i2c read fail, err=%d, %d line\n",
 				__func__, reg, __LINE__);
-			err = -EIO;
+			err = reg;
 			goto done;
 		}
 		data->default_mfm[i] = reg;
 
-		pr_info("%s: default_mfm[%d] = %x\n",
+		pr_info("%s: default_mfm[%d] = 0x%x\n",
 			__func__, i, data->default_mfm[i]);
 	}
 
@@ -1416,14 +1669,16 @@ static int asp01_apply_hw_dep_set(struct asp01_data *data)
 	if (reg_prom_en1 < 0) {
 		pr_err("%s : i2c read fail, err=%d, %d line\n",
 			__func__, reg_prom_en1, __LINE__);
-		err = -EIO;
+		err = reg_prom_en1;
 		goto done;
 	}
 
 	for (i = 0; i < SET_REG_NUM; i++) {
-		if (i < SET_HW_CON1)
+		if (i < SET_HW_CON1) {
 			init_reg[i][CMD] = data->pdata->init_code[i];
-		else {
+			pr_info("%s, init_reg[%d] = 0x%x\n", __func__, i,
+				init_reg[i][CMD]);
+		} else {
 			/* keep reset value if PROM_EN1 is 0xaa */
 			if (reg_prom_en1 != 0xaa)
 				init_reg[i][CMD] =
@@ -1434,39 +1689,62 @@ static int asp01_apply_hw_dep_set(struct asp01_data *data)
 				if (reg < 0) {
 					pr_err("%s : i2c read fail, err=%d, %d line\n",
 						__func__, reg, __LINE__);
-					err = -EIO;
+					err = reg;
 					goto done;
 				}
 				init_reg[i][CMD] = reg;
-				pr_info("%s: skip HW_CONs, reset value = %x\n",
-					__func__, reg);
+				pr_info("%s: skip HW_CONs, init_reg[%d] = 0x%x\n",
+					__func__, i, init_reg[i][CMD]);
 			}
 		}
 	}
 
-	/* 3.3V init code check */
-	reg = i2c_smbus_read_byte_data(data->client, REG_HW_CON7);
-	if (reg == 0x48)
-		goto done;
-
-	reg_hwcon10 = i2c_smbus_read_byte_data(data->client, REG_HW_CON10);
-	reg_hwcon6 = i2c_smbus_read_byte_data(data->client, REG_HW_CON6);
-	if (reg_hwcon10 == 0x37) {
-		i2c_smbus_write_byte_data(data->client,
-				REG_HW_CON6, init_reg[SET_HW_CON6][REG]-2);
-		i2c_smbus_write_byte_data(data->client,
-				REG_HW_CON7, 0x48);
-	} else if ((reg_hwcon6 & 0x0f) == 0x0f) {
-		i2c_smbus_write_byte_data(data->client,
-				REG_HW_CON6, reg_hwcon6 & 0xfe);
-		i2c_smbus_write_byte_data(data->client,
-				REG_HW_CON7, 0x48);
-	} else {
-		i2c_smbus_write_byte_data(data->client,
-				REG_HW_CON7, 0x48);
-	}
+	asp01_apply_3v3_set(data);
 done:
 	return err;
+}
+
+static void asp01_initdev_work_func(struct work_struct *work)
+{
+	struct asp01_data *data
+		= container_of(work, struct asp01_data, d_work_initdev.work);
+	int err;
+
+	pr_info("%s, is called\n", __func__);
+
+	mutex_lock(&data->data_mutex);
+	/* eeprom reset */
+	err = i2c_smbus_write_byte_data(data->client,
+		REG_UNLOCK, 0x5A);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+	err = i2c_smbus_write_byte_data(data->client,
+		REG_EEP_ADDR1, 0xFF);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+	err = i2c_smbus_write_byte_data(data->client,
+		REG_EEP_ST_CON, 0x42);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+	usleep_range(15000, 15100);
+	err = i2c_smbus_write_byte_data(data->client,
+		REG_EEP_ST_CON, 0x06);
+	if (err)
+		pr_err("%s: i2c write fail, err=%d, %d line\n",
+			__func__, err, __LINE__);
+
+	if (asp01_apply_hw_dep_set(data) < 0)
+		pr_err("%s, asp01_apply_hw_dep_set fail\n", __func__);
+
+	asp01_init_code_set(data);
+
+	asp01_grip_disable(data);
+
+	mutex_unlock(&data->data_mutex);
+	pr_info("%s, is done\n", __func__);
 }
 
 static int asp01_probe(struct i2c_client *client,
@@ -1477,7 +1755,7 @@ static int asp01_probe(struct i2c_client *client,
 	int err;
 	u8 reg;
 
-	pr_info("is started.\n");
+	pr_info("%s, is started.\n", __func__);
 	if (!i2c_check_functionality(client->adapter,
 				     I2C_FUNC_SMBUS_WRITE_BYTE_DATA |
 				     I2C_FUNC_SMBUS_READ_I2C_BLOCK)) {
@@ -1508,7 +1786,7 @@ static int asp01_probe(struct i2c_client *client,
 	if (reg < 0) {
 		pr_err("%s : i2c read fail, err=%d, %d line\n",
 			__func__, reg, __LINE__);
-		err = -EIO;
+		err = reg;
 		goto err_read_reg;
 	}
 	if (reg != SLAVE_ADDR) {
@@ -1517,47 +1795,13 @@ static int asp01_probe(struct i2c_client *client,
 		goto err_read_reg;
 	}
 
-#ifdef USE_EEPROM
-	/* eeprom reset */
-	err = i2c_smbus_write_byte_data(client,
-		REG_UNLOCK, 0x5A);
-	if (err) {
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-		goto err_read_reg;
-	}
-	err = i2c_smbus_write_byte_data(client,
-		REG_EEP_ADDR1, 0xFF);
-	if (err) {
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-		goto err_read_reg;
-	}
-	err = i2c_smbus_write_byte_data(client,
-		REG_EEP_ST_CON, 0x42);
-	if (err) {
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-		goto err_read_reg;
-	}
-	usleep_range(15000, 15100);
-	err = i2c_smbus_write_byte_data(client,
-		REG_EEP_ST_CON, 0x06);
-	if (err) {
-		pr_err("%s: i2c write fail, err=%d, %d line\n",
-			__func__, err, __LINE__);
-		goto err_read_reg;
-	}
-	usleep_range(5000, 5100);
-#endif
 	data->client = client;
 	i2c_set_clientdata(client, data);
 
-	if (asp01_apply_hw_dep_set(data) < 0)
-		goto err_read_reg;
-
 	atomic_set(&data->enable, 0);
 	data->skip_data = false;
+	data->skip_jig = false;
+	data->shutdown = false;
 
 	data->input = input_allocate_device();
 	if (!data->input) {
@@ -1582,10 +1826,11 @@ static int asp01_probe(struct i2c_client *client,
 	/* wake lock init */
 	wake_lock_init(&data->gr_wake_lock, WAKE_LOCK_SUSPEND,
 		       "grip_wake_lock");
-
-#ifdef FEATURE_INIT_TOUCH_OFF
 	INIT_DELAYED_WORK(&data->d_work, asp01_delay_work_func);
-#endif
+	INIT_DELAYED_WORK(&data->d_work_initdev, asp01_initdev_work_func);
+
+	schedule_delayed_work(&data->d_work_initdev,
+				msecs_to_jiffies(10));
 
 	/* Setup sysfs */
 	err =
@@ -1667,6 +1912,21 @@ static int asp01_probe(struct i2c_client *client,
 				__func__, dev_attr_cscr_const.attr.name);
 		goto err_cscr_const_device_create_file;
 	}
+
+	err = device_create_file(data->dev, &dev_attr_reg_debug);
+	if (err < 0) {
+		pr_err("%s: Failed to create device file(%s)\n",
+				__func__, dev_attr_reg_debug.attr.name);
+		goto err_reg_debug_device_create_file;
+	}
+
+	err = device_create_file(data->dev, &dev_attr_erase_cal);
+	if (err < 0) {
+		pr_err("%s: Failed to create device file(%s)\n",
+				__func__, dev_attr_erase_cal.attr.name);
+		goto err_reg_erase_cal_device_create_file;
+	}
+
 	dev_set_drvdata(data->dev, data);
 
 	INIT_WORK(&data->work, asp01_work_func);
@@ -1687,13 +1947,21 @@ static int asp01_probe(struct i2c_client *client,
 		dev_err(&client->dev,
 			"irq request failed %d, error %d\n",
 			data->pdata->irq, err);
+
+	touch_state = gpio_get_value(data->pdata->t_out);
+
 	usb_switch_register_notify(&jig_notify);
 	muic_attached_accessory_inquire();
+
 	pr_info("%s is successful.\n", __func__);
 
 	return 0;
 
 err_irq_initialize:
+	device_remove_file(data->dev, &dev_attr_erase_cal);
+err_reg_erase_cal_device_create_file:
+	device_remove_file(data->dev, &dev_attr_reg_debug);
+err_reg_debug_device_create_file:
 	device_remove_file(data->dev, &dev_attr_cscr_const);
 err_cscr_const_device_create_file:
 	device_remove_file(data->dev, &dev_attr_reset);
@@ -1723,14 +1991,24 @@ err_sysfs_create_group:
 err_read_reg:
 	kfree(data);
 exit:
-	usb_switch_unregister_notify(&jig_notify);
 	return err;
 }
 
 static int asp01_remove(struct i2c_client *client)
 {
 	struct asp01_data *data = i2c_get_clientdata(client);
-	usb_switch_unregister_notify(&jig_notify);
+
+	cancel_delayed_work_sync(&data->d_work_initdev);
+	if (atomic_read(&data->enable))
+		disable_irq(data->pdata->irq);
+	free_irq(data->pdata->irq, data);
+	cancel_delayed_work_sync(&data->d_work);
+
+	sysfs_remove_group(&data->input->dev.kobj,
+		&asp01_attribute_group);
+	input_unregister_device(data->input);
+	device_remove_file(data->dev, &dev_attr_erase_cal);
+	device_remove_file(data->dev, &dev_attr_reg_debug);
 	device_remove_file(data->dev, &dev_attr_cscr_const);
 	device_remove_file(data->dev, &dev_attr_reset);
 	device_remove_file(data->dev, &dev_attr_onoff);
@@ -1740,15 +2018,48 @@ static int asp01_remove(struct i2c_client *client)
 	device_remove_file(data->dev, &dev_attr_name);
 	device_remove_file(data->dev, &dev_attr_vendor);
 	device_remove_file(data->dev, &dev_attr_raw_data);
+
 	sensors_classdev_unregister(data->dev);
-	sysfs_remove_group(&data->input->dev.kobj,
-		&asp01_attribute_group);
 	wake_lock_destroy(&data->gr_wake_lock);
 	mutex_destroy(&data->data_mutex);
-	input_unregister_device(data->input);
 	kfree(data);
 
 	return 0;
+}
+
+void asp01_shutdown(struct i2c_client *client)
+{
+	struct asp01_data *data = i2c_get_clientdata(client);
+
+	pr_info("%s+\n", __func__);
+	data->shutdown = true;
+	cancel_delayed_work_sync(&data->d_work_initdev);
+	if (atomic_read(&data->enable))
+		disable_irq(data->pdata->irq);
+	free_irq(data->pdata->irq, data);
+	cancel_delayed_work_sync(&data->d_work);
+
+	sysfs_remove_group(&data->input->dev.kobj,
+		&asp01_attribute_group);
+	input_unregister_device(data->input);
+	device_remove_file(data->dev, &dev_attr_erase_cal);
+	device_remove_file(data->dev, &dev_attr_reg_debug);
+	device_remove_file(data->dev, &dev_attr_cscr_const);
+	device_remove_file(data->dev, &dev_attr_reset);
+	device_remove_file(data->dev, &dev_attr_onoff);
+	device_remove_file(data->dev, &dev_attr_check_crcs);
+	device_remove_file(data->dev, &dev_attr_threshold);
+	device_remove_file(data->dev, &dev_attr_calibration);
+	device_remove_file(data->dev, &dev_attr_name);
+	device_remove_file(data->dev, &dev_attr_vendor);
+	device_remove_file(data->dev, &dev_attr_raw_data);
+
+	sensors_classdev_unregister(data->dev);
+	wake_lock_destroy(&data->gr_wake_lock);
+	mutex_destroy(&data->data_mutex);
+	kfree(data);
+
+	pr_info("%s-\n", __func__);
 }
 
 static const struct i2c_device_id asp01_id[] = {
@@ -1766,6 +2077,7 @@ static struct i2c_driver asp01_driver = {
 		.owner = THIS_MODULE,
 		.name = "asp01",
 	},
+	.shutdown = asp01_shutdown,
 };
 
 static int __init asp01_init(void)

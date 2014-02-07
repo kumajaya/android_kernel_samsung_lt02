@@ -11,15 +11,22 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/syscalls.h>
+#include <linux/file.h>
+#include <linux/fs.h>
+#include <linux/fcntl.h>
+#include <asm/uaccess.h>
+
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
-//#include <mach/eden.h>
 #include <mach/mmp3.h>
 #include <mach/pxa988.h>
 #include <mach/pxa168fb.h>
 #include <mach/regs-mcu.h>
-//#include <mach/features.h>
 #if defined(CONFIG_MACH_LT02)
 #include <mach/mfp-pxa986-lt02.h>
 #elif defined(CONFIG_MACH_COCOA7)
@@ -67,6 +74,7 @@ typedef struct Vx5d3b_cabc_info {
 	struct device			*dev;
 	struct mutex			lock;
 	struct mutex			pwr_lock;
+	struct mutex			lvds_clk_switch_lock;
 
 	unsigned int			auto_brightness;
 	unsigned int			power_lut_idx;
@@ -74,7 +82,12 @@ typedef struct Vx5d3b_cabc_info {
 	unsigned int			prevee_strenght;	
 	unsigned int			first_count;
 	unsigned int			lcd_panel;
-	bool				lp_charge;
+	int 				recovery_mode;
+	unsigned int			lvds_clk;
+	unsigned int			orig_lvds_clk;
+	unsigned int			vx5b3d_backlight_frq;
+	int				lvds_clk_switching;
+	int				i2cfail;
 };
 
 static struct Vx5b3d_backlight_value backlight_table[5] = {
@@ -105,9 +118,6 @@ static struct Vx5b3d_backlight_value backlight_table[5] = {
 		.dim = 1,
 	}
 };
-struct Vx5b3d_backlight_value *pwm;
-struct class *mdnie_class;
-struct Vx5d3b_cabc_info *g_vx5d3b = NULL;
 
 #define V5D3BX_VEESTRENGHT		0x00001f07
 #define V5D3BX_VEEDEFAULTVAL		0
@@ -119,6 +129,10 @@ struct Vx5d3b_cabc_info *g_vx5d3b = NULL;
 #define V5D3BX_CABCBRIGHTNESSRATIO	815
 #define V5D3BX_10KHZ_DEFAULT_RATIO	4707
 #define V5D3BX_5P9KHZ_DEFAULT_RATIO	8000
+#define V5D3BX_5P9KHZ_50P98_OFFSET	458
+#define V5D3BX_5P9KHZ_50P18_OFFSET	329
+#define V5D3BX_5P9KHZ_48P52_OFFSET	50
+
 #define AUTOBRIGHTNESS_LIMIT_VALUE	207
 
 #define MIN_BRIGHTNESS			0
@@ -129,11 +143,20 @@ struct Vx5d3b_cabc_info *g_vx5d3b = NULL;
 #define LOW_BATTERY_LEVEL		10
 #define MINIMUM_VISIBILITY_LEVEL	30
 #define DEFAULT_BRIGHTNESS		MID_BRIGHTNESS_LEVEL
-#endif
+#define LVDS_CLK_48P19Mhz		0
+#define LVDS_CLK_50P98Mhz		1
+#define LVDS_CLK_50P18Mhz		2
+#define LVDS_CLK_48P52Mhz		3
 
+struct Vx5b3d_backlight_value *pwm;
+struct class *mdnie_class;
+struct Vx5d3b_cabc_info *g_vx5d3b = NULL;
 struct pxa168fb_info *fbi_global = NULL;
 static int dsi_init(struct pxa168fb_info *fbi);
 static int lt02_update_brightness(struct Vx5d3b_cabc_info *g_vx5d3b);
+
+#endif
+
 /*
  * dsi bpp : rgb_mode
  *    16   : DSI_LCD_INPUT_DATA_RGB_MODE_565;
@@ -254,36 +277,11 @@ static int dsi_init(struct pxa168fb_info *fbi)
 
 		/* disable continuous clock */
 		dsi_cclk_set(fbi, 0);
-#ifdef Vx5B3D_MIPI_MERGE
-		/* dsi out of reset */
-		dsi_reset(fbi, 0);
-#else /* For tc35876x i2c*/
-#ifdef CONFIG_MACH_LT02
-		if (system_rev < LT02_BRINGUP_02) {
-			/* dsi out of reset */
-			dsi_reset(fbi, 0);
-		}
-#endif
-#endif
-	}
-#if 0 /* For tc35876x i2c*/
-	if (system_rev >= LT02_BRINGUP_02) {
-		/*  reset the bridge */
-		if (mi->xcvr_reset) {
-			mi->xcvr_reset(fbi);
-			mdelay(10);
-		}
-		
-		/* set dsi to dpi conversion chip */
-		if (mi->phy_type == DSI2DPI) {
-			ret = mi->dsi2dpi_set(fbi);
-			if (ret < 0)
-			pr_err("dsi2dpi_set error!\n");
-		}
+
 		/* dsi out of reset */
 		dsi_reset(fbi, 0);
 	}
-#endif	
+
 	/* turn on DSI continuous clock */
 	dsi_cclk_set(fbi, 1);
 
@@ -519,7 +517,7 @@ static ssize_t auto_brightness_store(struct device *dev,
 		return size;
 
 	rc = strict_strtoul(buf, (unsigned int)0, (unsigned long *)&value);
-	
+
 	if (rc < 0)
 		return rc;
 	else {
@@ -540,7 +538,7 @@ static ssize_t auto_brightness_store(struct device *dev,
 			ret |= tc35876x_write32(0x174,0xff);
 		}
 		mutex_unlock(&Vee_cabc->lock);
-		
+
 		mdelay(1);
 
 		if (ret < 0)
@@ -551,10 +549,10 @@ static ssize_t auto_brightness_store(struct device *dev,
 		Vee_cabc->auto_brightness = value;
 
 		Vee_cabc->cabc = (value) ? CABC_ON : CABC_OFF;
-		
-			
+
+
 		lt02_update_brightness(Vee_cabc);
-		
+
 		mutex_unlock(&Vee_cabc->lock);
 	}
 	return size;
@@ -570,7 +568,7 @@ device_attribute *attr, const char *buf, size_t size)
 	int value;
 	u32 vee_value = 0x00001f07;	
 	int rc;
-		
+
 	rc = strict_strtoul(buf, (unsigned int) 0, (unsigned long *)&value);
 	if (rc < 0)
 		return rc;
@@ -599,7 +597,7 @@ device_attribute *attr, const char *buf, size_t size)
 	static u16 vee_register = 0;
 	static int cnt;
 	int rc;
-		
+
 	rc = strict_strtoul(buf, (unsigned int) 0, (unsigned long *)&value);
 
 	if (rc < 0)
@@ -646,6 +644,80 @@ device_attribute *attr, const char *buf, size_t size)
 }
 static DEVICE_ATTR(vx5b3d_Regread, 0664,NULL, vx5b3d_Regread_store);
 
+ ssize_t lvds_clk_switch_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct Vx5d3b_cabc_info *Vee_cabc = g_vx5d3b;
+
+	int ret = 0;
+	ret = sprintf(buf, "%d\n", Vee_cabc->lvds_clk);
+	return ret;
+}
+
+ ssize_t lvds_clk_switch_store(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+
+{
+	struct Vx5d3b_cabc_info *Vee_cabc = g_vx5d3b;
+	int ret = 0;
+	unsigned int value = 0;
+
+	ret = strict_strtoul(buf, 0, (unsigned long *)&value);
+
+	dev_info(dev, "%s :: value=%d\n", __func__, value);
+
+	if(value == Vee_cabc->lvds_clk)
+	{
+		printk(" lvds clk has been what you want,so not change\n");
+
+		return -1;
+	}
+	else if( value > LVDS_CLK_48P52Mhz)
+	{
+		printk(" invalid lvds freq index!!!\n");
+		return -1;
+	}
+
+	printk("%s:lvds clk swith to %\n",Vee_cabc->lvds_clk);
+
+	/*just for user mode.
+	for test mode,return -1 directly*/
+	if (fbi_global->active == 0)
+	{
+		mutex_lock(&Vee_cabc->lvds_clk_switch_lock);
+		/*save new lvds clk temprarily*/		
+		Vee_cabc->lvds_clk = value;
+		/*update video_modes for every lvds clk update request during lcd off,
+		lvds setting will be updated during lcd resume */
+		pxa168fb_update_modes(fbi_global,Vee_cabc->lvds_clk,Vee_cabc->lcd_panel);
+		mutex_unlock(&Vee_cabc->lvds_clk_switch_lock);
+		return -1;
+	}
+
+
+	mutex_lock(&Vee_cabc->lvds_clk_switch_lock);
+
+	Vee_cabc->lvds_clk = value;
+
+	Vee_cabc->lvds_clk_switching = true;
+
+	lt02_update_brightness(g_vx5d3b);
+
+	pxa168fb_update_modes(fbi_global,Vee_cabc->lvds_clk,Vee_cabc->lcd_panel);
+	dsi_init(fbi_global);
+
+	Vee_cabc->orig_lvds_clk = Vee_cabc->lvds_clk;
+	Vee_cabc->lvds_clk_switching = false;
+
+	lt02_update_brightness(g_vx5d3b);
+
+	mutex_unlock(&Vee_cabc->lvds_clk_switch_lock);
+
+	return count;
+}
+
+
+DEVICE_ATTR(lvds_clk_switch, 0664, lvds_clk_switch_show, lvds_clk_switch_store);
 static ssize_t lcd_type_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
@@ -721,6 +793,51 @@ static struct device_attribute mdnie_attributes[] = {
 	__ATTR_NULL,
 };
 
+static ssize_t i2cfail_show(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct Vx5d3b_cabc_info *Vee_cabc = g_vx5d3b;
+
+	return sprintf(buf, "%d\n", Vee_cabc->i2cfail);
+}
+static DEVICE_ATTR(i2cfail, 0664, i2cfail_show, NULL);
+
+void i2cfail_sysfs_check(int onoff )
+{
+	int fd;
+	struct file *filp;
+	char bufs[1];
+	int ret;
+
+	struct Vx5d3b_cabc_info *Vee_cabc = g_vx5d3b;
+
+	mm_segment_t old_fs = get_fs();
+	set_fs(KERNEL_DS);
+
+	/* open a file */
+	filp = filp_open("/sys/class/lcd/panel/i2cfail", O_RDWR, S_IRUSR|S_IWUSR);
+	if (IS_ERR(filp)) {
+		printk("open error\n");
+		return;
+	}
+	else {
+		printk("open success\n");
+	}
+	if (onoff)
+		bufs[0] = 1;
+	else
+		bufs[0] = 0;
+	/* write example */
+	printk("filp->f_pos = %d\n", (int)filp->f_pos);
+	vfs_write(filp, bufs, strlen(bufs), &filp->f_pos);
+	printk("filp->f_pos = %d\n", (int)filp->f_pos);
+
+	filp_close(filp, NULL);  /* filp_close(filp, current->files) ?	*/
+	/* restore kernel memory setting */
+	set_fs(old_fs);
+
+}
+
 void vx5b3dx_backlightReg_off(void)
 {
 	tc35876x_write32(0x164, 0x0);
@@ -730,6 +847,7 @@ void vx5b3dx_backlightReg_off(void)
 
 void vx5b3dx_backlightReg_on(void)
 {
+	struct Vx5d3b_cabc_info *vx5d3b = g_vx5d3b;
 	unsigned int  lcd_internal_ldo_en = 0, v_sys_lcd = 0;
 
 
@@ -749,17 +867,24 @@ void vx5b3dx_backlightReg_on(void)
 	gpio_direction_output(lcd_internal_ldo_en, 1);
 	mdelay(1);
 
-	
-	tc35876x_write32(0x160, 0x7F8);
+	if(LVDS_CLK_50P98Mhz == vx5d3b->lvds_clk)	
+		tc35876x_write32(0x160, 0x86C);
+	else if(LVDS_CLK_50P18Mhz == vx5d3b->lvds_clk)
+		tc35876x_write32(0x160, 0x84C);
+	else if(LVDS_CLK_48P52Mhz == vx5d3b->lvds_clk)	
+		tc35876x_write32(0x160, 0x805);
+	else
+		tc35876x_write32(0x160, 0x7F8); /*Default for 48.2Mhz*/
+
 	/*tc35876x_write32(0x164, 0x0);*/
 	tc35876x_write32(0x604, 0x3FFFFFE0/*0xff*/);
 	msleep(200);
 	tc35876x_write32(0x138, 0x3fff0000);
 	tc35876x_write32(0x15c, 0x5);
-	
+
 	gpio_free(lcd_internal_ldo_en);
 	gpio_free(v_sys_lcd);
-	
+
 }
 static int lt02_set_brightness(struct backlight_device *bd)
 {
@@ -768,7 +893,7 @@ static int lt02_set_brightness(struct backlight_device *bd)
 
 	if (fbi_global->active)
 		lt02_update_brightness(vx5d3b);
-	
+
 	return ret;
 }
 
@@ -786,6 +911,9 @@ static int lt02_update_brightness(struct Vx5d3b_cabc_info *g_vx5d3b)
 		brightness = 0;
 
 	if (g_vx5d3b->bd->props.fb_blank != FB_BLANK_UNBLANK)
+		brightness = 0;
+	
+	if(g_vx5d3b->lvds_clk_switching)
 		brightness = 0;
 
 	/*
@@ -828,7 +956,7 @@ static int lt02_update_brightness(struct Vx5d3b_cabc_info *g_vx5d3b)
 		switch (g_vx5d3b->auto_brightness) {
 
 		case	0 ... 3:
-			g_vx5d3b->vee_strenght = V5D3BX_DEFAULT_STRENGHT;				
+			g_vx5d3b->vee_strenght = V5D3BX_DEFAULT_STRENGHT;
 			break;
 		case	4 ... 5:
 			g_vx5d3b->vee_strenght = V5D3BX_DEFAULT_LOW_STRENGHT;
@@ -854,18 +982,31 @@ static int lt02_update_brightness(struct Vx5d3b_cabc_info *g_vx5d3b)
 
 	/* brightness setting from platform is from 0 to 255 */
 	mutex_lock(&g_vx5d3b->pwr_lock);
+	
+	if (LVDS_CLK_50P98Mhz == g_vx5d3b->lvds_clk)	
+		g_vx5d3b->vx5b3d_backlight_frq = V5D3BX_5P9KHZ_DEFAULT_RATIO + V5D3BX_5P9KHZ_50P98_OFFSET;
+	else if (LVDS_CLK_50P18Mhz == g_vx5d3b->lvds_clk)
+		g_vx5d3b->vx5b3d_backlight_frq = V5D3BX_5P9KHZ_DEFAULT_RATIO + V5D3BX_5P9KHZ_50P18_OFFSET;
+	else if (LVDS_CLK_48P52Mhz == g_vx5d3b->lvds_clk)
+		g_vx5d3b->vx5b3d_backlight_frq = V5D3BX_5P9KHZ_DEFAULT_RATIO + V5D3BX_5P9KHZ_48P52_OFFSET;
+	else	/*Default for 48.2Mhz*/
+		g_vx5d3b->vx5b3d_backlight_frq = V5D3BX_5P9KHZ_DEFAULT_RATIO;
 
 	if ((g_vx5d3b->prevee_strenght != vee_strenght) && (brightness != 0))
 		ret |= tc35876x_write32(0x400,vee_strenght);
 
 	if (!g_vx5d3b->first_count)
-		ret |= tc35876x_write32(0x164,((vx5b3d_brightness * V5D3BX_5P9KHZ_DEFAULT_RATIO)/1000));
+		ret |= tc35876x_write32(0x164,((vx5b3d_brightness * g_vx5d3b->vx5b3d_backlight_frq)/1000));
 
 	/*backlight duty ration control when device is first backlight on.*/
 	if (g_vx5d3b->first_count && brightness != 0) {
 		printk("backlight control first...[%d] \n",brightness);
 		vx5b3dx_backlightReg_on();
-		ret |= tc35876x_write32(0x164,((vx5b3d_brightness * V5D3BX_5P9KHZ_DEFAULT_RATIO)/1000));
+		ret |= tc35876x_write32(0x164,((vx5b3d_brightness * g_vx5d3b->vx5b3d_backlight_frq)/1000));
+
+		if (ret < 0)
+			i2cfail_sysfs_check(1);
+			/*g_vx5d3b->i2cfail = 1;*/
 		g_vx5d3b->first_count = false;
 	}
 
@@ -976,7 +1117,7 @@ static int lt02_lcd_power(struct pxa168fb_info *fbi,
 			/* Backlight off*/
 			g_vx5d3b->prevee_strenght = 0;
 			g_vx5d3b->auto_brightness = 0;
-
+			i2cfail_sysfs_check(0);
 			vx5b3dx_backlightReg_off();
 			
 			msleep(200);
@@ -1113,87 +1254,13 @@ static int dsi_set_tc358765(struct pxa168fb_info *fbi)
 	struct Vx5d3b_cabc_info *vx5d3b = g_vx5d3b;
 	int status;
 	u32 val = 0;
+
 	pr_info("VX5B3D ...START.....\n");
-#ifndef Vx5B3D_MIPI_MERGE/*For i2c*/
-	tc35876x_write32(0x700, 0x6C900040);
 
-#if defined(CONFIG_MACH_LT02)
-	if (system_rev >= LT02_R0_3)
-	tc35876x_write32(0x704, 0x30438);
-	else
-	tc35876x_write32(0x704, 0x302DB);
-#elif defined(CONFIG_MACH_COCOA7)
-	if (system_rev >= COCOA7_R0_3)
-	tc35876x_write32(0x704, 0x30438);
-	else
-	tc35876x_write32(0x704, 0x302DB);
-#else
-	tc35876x_write32(0x704, 0x302DB);
-#endif
-	tc35876x_write32(0x70C, 0x00004604);
-	tc35876x_write32(0x710, 0x54D000B);
-	tc35876x_write32(0x714, 0x20);
-	tc35876x_write32(0x718, 0x00000102);
-	tc35876x_write32(0x71C, 0xA8002F);
-	tc35876x_write32(0x720, 0x0);
-	tc35876x_write32(0x154, 0x00000000);
-	tc35876x_write32(0x154, 0x80000000);
-	tc35876x_write32(0x700, 0x6C900840);
-	tc35876x_write32(0x70C, 0x5E46/*0x5646*/);
-	tc35876x_write32(0x718, 0x00000202);
-	tc35876x_write32(0x154, 0x00000000);
-	tc35876x_write32(0x154, 0x80000000);
-	tc35876x_write32(0x120, 0x5);
-	tc35876x_write32(0x124, 0x512C400);
-	tc35876x_write32(0x128, 0x104010);
-	tc35876x_write32(0x12C, 0x93);
-	tc35876x_write32(0x130, 0x3C18);
-	tc35876x_write32(0x134, 0x15);
-	tc35876x_write32(0x138, 0xFF8000);
-	tc35876x_write32(0x13C, 0x0);
-
-	/*PWM  100 % duty ration*/
-	
-	tc35876x_write32(0x114, 0xc6302);
-	/*backlight duty ration control when device is first bring up.*/	
-	tc35876x_write32(0x160, 0xff);
-	if ( g_vx5d3b->first_count == 1)
-	{	
-		tc35876x_write32(0x164, 0x7f);
-		g_vx5d3b->first_count = 0;
-	}
-	tc35876x_write32(0x138, 0x3fff0000);
-	tc35876x_write32(0x15c, 0x5);	
-	/* END...*/
-	
-	tc35876x_write32(0x140, 0x10000);
-	tc35876x_write32(0x20C, 0x134);
-	tc35876x_write32(0x21C, 0x0);
-	tc35876x_write32(0x224, 0x0);
-	tc35876x_write32(0x228, 0x50001);
-	tc35876x_write32(0x22C, 0xFF03);
-	tc35876x_write32(0x230, 0x1);
-	tc35876x_write32(0x234, 0xCA033E10);
-	tc35876x_write32(0x238, 0x00000060);
-	tc35876x_write32(0x23C, 0x82E86030);
-	tc35876x_write32(0x244, 0x001E0285);
-	tc35876x_write32(0x258, 0x30014);
-	tc35876x_write32(0x158, 0x0);
-	tc35876x_write32(0x158, 0x1);
-	tc35876x_write32(0x37C, 0x00001063);
-	tc35876x_write32(0x380, 0x82A86030);
-	tc35876x_write32(0x384, 0x2861408B);
-	tc35876x_write32(0x388, 0x00130285);
-	tc35876x_write32(0x38C, 0x10630009);
-	tc35876x_write32(0x394, 0x400B82A8);
-	tc35876x_write32(0x600, 0x16CC78C);
-	tc35876x_write32(0x604, 0x3FFFFFE0);
-	tc35876x_write32(0x608, 0xD8C);
-	tc35876x_write32(0x154, 0x00000000);
-	tc35876x_write32(0x154, 0x80000000);
-#else
 	set_dsi_low_power_mode(fbi);
 	mdelay(20);
+
+	printk("lvds clk @resume =%d\n",vx5d3b->lvds_clk);
 
 	mutex_lock(&vx5d3b->pwr_lock);
 
@@ -1201,7 +1268,18 @@ static int dsi_set_tc358765(struct pxa168fb_info *fbi)
 
 #if defined(CONFIG_MACH_LT02)
 	if (system_rev >= LT02_R0_3)
-	vx5d3b_mipi_write(fbi,0x704, 0x3040D,4);
+	{
+		if(LVDS_CLK_50P18Mhz == vx5d3b->lvds_clk)
+		vx5d3b_mipi_write(fbi,0x704, 0x30438,4);
+		else if(LVDS_CLK_50P98Mhz == vx5d3b->lvds_clk)
+		vx5d3b_mipi_write(fbi,0x704, 0x30449,4);
+		else if(LVDS_CLK_48P19Mhz == vx5d3b->lvds_clk)
+		vx5d3b_mipi_write(fbi,0x704, 0x3040d,4);
+		else if(LVDS_CLK_48P52Mhz == vx5d3b->lvds_clk)
+		vx5d3b_mipi_write(fbi,0x704, 0x30414,4);/*48.52Mh*/
+		else
+			printk("invalid lvds clk!!!\n");
+	}
 	else
 	vx5d3b_mipi_write(fbi,0x704, 0x302BE,4);
 #elif defined(CONFIG_MACH_COCOA7)
@@ -1246,9 +1324,31 @@ static int dsi_set_tc358765(struct pxa168fb_info *fbi)
 	/* ...move for system reset command (0x158)*/
 
 	vx5d3b_mipi_write(fbi,0x120, 0x5,4);
-	vx5d3b_mipi_write(fbi,0x124, 0x4D2C400,4);
+
+	if(LVDS_CLK_50P18Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x124, 0x0512C400,4);
+	else if(LVDS_CLK_50P98Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x124, 0x0512c400,4);
+	else if(LVDS_CLK_48P19Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x124, 0x04d2C400,4);
+	else if(LVDS_CLK_48P52Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x124, 0x04d2C400,4);
+	else
+		printk("invalid lvds clk!!!\n");
+
 	vx5d3b_mipi_write(fbi,0x128, 0x104010,4);
-	vx5d3b_mipi_write(fbi,0x12C, 0x8D,4);
+
+	if(LVDS_CLK_50P18Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x12C, 0x93,4);
+	else if(LVDS_CLK_50P98Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x12C, 0x95,4);
+	else if(LVDS_CLK_48P19Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x12C, 0x8d,4);
+	else if(LVDS_CLK_48P52Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x12C, 0x89,4);
+	else
+		printk("invalid lvds clk!!!\n");
+
 	vx5d3b_mipi_write(fbi,0x130, 0x3C18,4);
 	vx5d3b_mipi_write(fbi,0x134, 0x15,4);
 	vx5d3b_mipi_write(fbi,0x138, 0xFF8000,4);
@@ -1301,7 +1401,17 @@ static int dsi_set_tc358765(struct pxa168fb_info *fbi)
 	vx5d3b_mipi_write(fbi,0x238, 0x00000060,4);
 	vx5d3b_mipi_write(fbi,0x23C, 0x82E86030,4);
 	vx5d3b_mipi_write(fbi,0x244, 0x001E0285,4);
+
+	if(LVDS_CLK_50P18Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x258, 0x30014,4);
+	else if(LVDS_CLK_50P98Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x258, 0x30014,4);
+	else if(LVDS_CLK_48P19Mhz == vx5d3b->lvds_clk)
 	vx5d3b_mipi_write(fbi,0x258, 0x30013,4);
+	else if(LVDS_CLK_48P52Mhz == vx5d3b->lvds_clk)
+	vx5d3b_mipi_write(fbi,0x258, 0x30013,4);
+	else
+		printk("invalid lvds clk!!!\n");
 
 	/*vee strenght initialization*/
 	vx5d3b_mipi_write(fbi,0x400, 0x0,4);
@@ -1319,131 +1429,17 @@ static int dsi_set_tc358765(struct pxa168fb_info *fbi)
 	mutex_unlock(&vx5d3b->pwr_lock);
 	
 	lt02_update_brightness(g_vx5d3b);
-#endif
-
-/* For bringup emul board of LT02 */
-#ifndef CONFIG_TC35876X
-	struct fb_var_screeninfo *var = &(fbi->fb_info->var);
-	struct dsi_info *di = &lt02_dsiinfo;
-	u16 chip_id = 0;
-	u8 vesa_rgb888 = 1;
-
-	status = tc35876x_read16(TC358765_CHIPID_REG, &chip_id);
-	
-	if ((status < 0) || (chip_id != TC358765_CHIPID)) {
-		pr_err("tc35876x unavailable! chip_id %x\n", chip_id);
-		return -EIO;
-	} else
-		pr_debug("tc35876x(chip id:0x%02x) detected.\n", chip_id);
-#if 1
-	if (vesa_rgb888) {
-	/* VESA format instead of JEIDA format for RGB888 */
-	tc35876x_write32( LVMX0003, 0x03020100);
-	tc35876x_write32( LVMX0407, 0x08050704);
-	tc35876x_write32( LVMX0811, 0x0F0E0A09);
-	tc35876x_write32( LVMX1215, 0x100D0C0B);
-	tc35876x_write32( LVMX1619, 0x12111716);
-	tc35876x_write32( LVMX2023, 0x1B151413);
-	tc35876x_write32( LVMX2427, 0x061A1918);
-	}	
-#endif
-	/* REG 0x13C,DAT 0x000C000F */
-	tc35876x_write32(PPI_TX_RX_TA, 0x00040004);
-	/* REG 0x114,DAT 0x0000000A */
-	tc35876x_write32(PPI_LPTXTIMECNT, 0x00000004);
-
-	/* get middle value of mim-max value
-	 * 0-0x13 for 2lanes-rgb888, 0-0x26 for 4lanes-rgb888
-	 * 0-0x21 for 2lanes-rgb565, 0-0x25 for 4lanes-rgb565
-	 */
-	if (di->lanes == 4)
-		status = 0x13;
-	else if (di->bpp == 24)
-		status = 0xa;
-	else
-		status = 0x11;
-	/* REG 0x164,DAT 0x00000005 */
-	tc35876x_write32(PPI_D0S_CLRSIPOCOUNT, status);//asserting time for lp->hs
-	/* REG 0x168,DAT 0x00000005 */
-	tc35876x_write32(PPI_D1S_CLRSIPOCOUNT, status);
-	if (di->lanes == 4) {
-		/* REG 0x16C,DAT 0x00000005 */
-		tc35876x_write32(PPI_D2S_CLRSIPOCOUNT, status);
-		/* REG 0x170,DAT 0x00000005 */
-		tc35876x_write32(PPI_D3S_CLRSIPOCOUNT, status);
-	}
-
-	/* REG 0x134,DAT 0x00000007 */
-	tc35876x_write32(PPI_LANEENABLE, (di->lanes == 4) ? 0x1f : 0x7);
-	/* REG 0x210,DAT 0x00000007 */
-	tc35876x_write32(DSI_LANEENABLE, (di->lanes == 4) ? 0x1f : 0x7);
-
-	/* REG 0x104,DAT 0x00000001 */
-	tc35876x_write32(PPI_STARTPPI, 0x0000001);
-	/* REG 0x204,DAT 0x00000001 */
-	tc35876x_write32(DSI_STARTDSI, 0x0000001);
-
-	/*
-	 * REG 0x450,DAT 0x00012020, VSDELAY = 8 pixels,
-	 * enable magic square if in_bpp == 24, out_bpp == 18
-	 */
-	/* tc35876x_write32(VPCTRL, 0x00800020 | (di->bpp == 24 ? 1 : 0)); */
-	tc35876x_write32(VPCTRL, 0x00800120);
-#if 1
-	/* REG 0x454,DAT 0x00200008*/
-	tc35876x_write32(HTIM1, ((var->left_margin) << 16)
-			| var->hsync_len);
-
-	/* REG 0x45C,DAT 0x00040004*/
-	tc35876x_write32(VTIM1, ((var->upper_margin) << 16)
-			| var->vsync_len);
-#else
-	tc35876x_write32(HTIM1, 0x00200002);
-	tc35876x_write32(HTIM1, 0x00200500);
-
-	/* REG 0x45C,DAT 0x00040004*/
-	tc35876x_write32(VTIM1,0x00180002);
-	tc35876x_write32(VTIM1,0x00180320);
-#endif
-
-
-	/* After change the video timing parameters (HTIM1,2, VTIM1,2),
-	 * VFUEN has to be set. */
-	tc35876x_write32(VFUEN, 0x00000001);
-	/* After power on and hardware reset, LVPHY needs LV_RST and RSTLCD. */
-	tc35876x_write32(LVPHY0, 0x00448006);
-	mdelay(1);
-	tc35876x_write32(LVPHY0, 0x00048006);
-	tc35876x_write32(SYSRST, 0x00000004);///if needed???
-
-	/* Set unused gpio as output/low */
-	tc35876x_write32(GPIOC, 0x0000001F);
-	tc35876x_write32(GPIOO, 0x00000000);
-
-	/*
-	 * no EXTCLK: After reset, If EXTCLK toggles then EXTCLK is selected as
-	 * pixel clock source, else DSICLK is selected(LVCFG register describes
-	 * the DSICLK divide options).
-	 * PCLKDIV = 1(div=4)
-	 * Now, the DSICLK_OUT = 208M, so TC3_PCLK = 52M
-	 */
-
-	/* REG 0x49C,DAT 0x00000201 */
-	tc35876x_write32(LVCFG, 0x00000001);//sigle link???
-
-	/* dump register value */
-	tc358765_dump();	
-#endif	/* For bringup emul board of LT02 */
 
 	pr_info("VX5B3D ..END.....\n");
 	return 0;
 }
 
+
 void __init lt02_add_lcd_mipi(void)
 {
 	struct dsi_info *dsi = NULL;
 	struct pxa168fb_mach_info *fb = &mipi_lcd_info, *ovly =
-	    &mipi_lcd_ovly_info;
+		&mipi_lcd_ovly_info;
 
 	unsigned int CSn_NO_COL;
 	int ret = 0;
@@ -1472,7 +1468,6 @@ void __init lt02_add_lcd_mipi(void)
 	dsi->master_mode = 1;
 	dsi->hfp_en = 0;
 
-	fb->recovery_mode = recovery_mode;
 #ifndef CONFIG_BACKLIGHT_TPS61165
 	/*For v5b3dx cabc*/
 	mdnie_class = class_create(THIS_MODULE, "mdnie");
@@ -1512,25 +1507,32 @@ void __init lt02_add_lcd_mipi(void)
 	vx5d3bInfo->prevee_strenght = 1;
 	vx5d3bInfo->auto_brightness = false;
 	vx5d3bInfo->first_count = false;
-	vx5d3bInfo->lp_charge = false;
-	vx5d3bInfo->lp_charge = lpcharge;
 	vx5d3bInfo->lcd_panel = panel_id;
 	vx5d3bInfo->vee_lightValue = &backlight_table[vx5d3bInfo->lcd_panel];
+	vx5d3bInfo->lvds_clk = LVDS_CLK_48P19Mhz;
+ 	vx5d3bInfo->orig_lvds_clk = LVDS_CLK_48P19Mhz;
+ 	vx5d3bInfo->lvds_clk_switching = false;
+	vx5d3bInfo->recovery_mode = recovery_mode;
+	vx5d3bInfo->vx5b3d_backlight_frq = V5D3BX_5P9KHZ_DEFAULT_RATIO;
+	vx5d3bInfo->i2cfail = 0;
 
+	if (vx5d3bInfo->recovery_mode)
+		fb->mmap = 2;
+	else
+		fb->mmap = 3;
 
 	if (vx5d3bInfo->lcd_panel == 0) {
 		fb->modes->left_margin = 130;/* CPT*/
 		fb->modes->hsync_len = 16;
 	}
-	else if (vx5d3bInfo->lcd_panel == 2 || vx5d3bInfo->lcd_panel == 4)
-	{
+	else if (vx5d3bInfo->lcd_panel == 2 || vx5d3bInfo->lcd_panel == 4) {
 		fb->modes->hsync_len = 16;
 		fb->modes->left_margin = 142;/*BOEVE / SDCVE*/
 		fb->modes->right_margin = 185;
 		fb->modes->vsync_len = 4;
 		fb->modes->upper_margin = 7;
-		fb->modes->lower_margin = 7;	
-	}		
+		fb->modes->lower_margin = 7;
+	}
 
 	if (device_create_file(&vx5d3bInfo->bd->dev, &dev_attr_auto_brightness) < 0)
 		pr_err("Failed to create auto_brightness\n");
@@ -1556,19 +1558,17 @@ void __init lt02_add_lcd_mipi(void)
 	if (device_create_file(&vx5d3bInfo->lcd->dev, &dev_attr_vee_strenght) < 0)
 		pr_info("Failed to create device file for vee_strenght!\n");
 
+	if (device_create_file(&vx5d3bInfo->lcd->dev, &dev_attr_i2cfail) < 0)
+		pr_info("Failed to create device file for i2cfail!\n");
+
 	mutex_init(&vx5d3bInfo->lock);
 	mutex_init(&vx5d3bInfo->pwr_lock);
+	mutex_init(&vx5d3bInfo->lvds_clk_switch_lock);
 
 	g_vx5d3b = vx5d3bInfo;
 
 #endif
 	/* align with android format and vres_virtual pitch */
-/*
-	if (g_vx5d3b->lp_charge == true) {
-		fb->pix_fmt = PIX_FMT_RGBA888;
-		fb->xres_virtual = ALIGN(fb->modes->xres, 16);
-	}
-*/
 	dither_config(fb);
 	/*
 	 * Re-calculate lcd clk source and divider

@@ -25,6 +25,7 @@
 #include <linux/poll.h>
 #include <linux/slab.h>
 #include <linux/time.h>
+#include <linux/fb.h>
 #include "logger.h"
 
 #include <asm/ioctls.h>
@@ -485,123 +486,104 @@ void gaf_helper(void)
 
 
 #ifdef CONFIG_KERNEL_DEBUG_SEC
-
 //{{ Mark for GetLog -1/2
-
 struct struct_plat_log_mark {
-
 	u32 special_mark_1;
-
 	u32 special_mark_2;
-
 	u32 special_mark_3;
-
 	u32 special_mark_4;
-
 	void *p_main;
-
 	void *p_radio;
-
 	void *p_events;
-
 	void *p_system;
-
 };
-
-
 
 static struct struct_plat_log_mark plat_log_mark = {
-
 	.special_mark_1 = (('*' << 24) | ('^' << 16) | ('^' << 8) | ('*' << 0)),
-
 	.special_mark_2 = (('I' << 24) | ('n' << 16) | ('f' << 8) | ('o' << 0)),
-
 	.special_mark_3 = (('H' << 24) | ('e' << 16) | ('r' << 8) | ('e' << 0)),
-
 	.special_mark_4 = (('p' << 24) | ('l' << 16) | ('o' << 8) | ('g' << 0)),
-
 	.p_main = 0,
-
 	.p_radio = 0,
-
 	.p_events = 0,
-
 	.p_system= 0,
-
 };
-
-
 
 struct struct_marks_ver_mark {
-
 	u32 special_mark_1;
-
 	u32 special_mark_2;
-
 	u32 special_mark_3;
-
 	u32 special_mark_4;
-
 	u32 log_mark_version;
-
 	u32 framebuffer_mark_version;
-
 	void * this;		/* this is used for addressing log buffer in 2 dump files*/
-
 	u32 first_size;		/* first memory block's size */
-
 	u32 first_start_addr;	/* first memory block'sPhysical address */
-
 	u32 second_size;	/* second memory block's size */
-
 	u32 second_start_addr;	/* second memory block'sPhysical address */
-
 };
-
-
 
 static struct struct_marks_ver_mark marks_ver_mark = {
-
 	.special_mark_1 = (('*' << 24) | ('^' << 16) | ('^' << 8) | ('*' << 0)),
-
 	.special_mark_2 = (('I' << 24) | ('n' << 16) | ('f' << 8) | ('o' << 0)),
-
 	.special_mark_3 = (('H' << 24) | ('e' << 16) | ('r' << 8) | ('e' << 0)),
-
 	.special_mark_4 = (('v' << 24) | ('e' << 16) | ('r' << 8) | ('s' << 0)),
-
 	.log_mark_version = 1,
-
 	.framebuffer_mark_version = 1,
-
 	.this=&marks_ver_mark,
-
 	.first_size=512*1024*1024,	// it has dependency on h/w
-
 	.first_start_addr=0x00000000,	// it has dependency on h/w
-
 	.second_size=0,	// it has dependency on h/w
-
 	.second_start_addr=0	// it has dependency on h/w
-
 };
 
+static struct {
+	u32 special_mark_1;
+	u32 special_mark_2;
+	u32 special_mark_3;
+	u32 special_mark_4;
+	void *p_fb;		/* it must be physical address */
+	u32 xres;
+	u32 yres;
+	u32 bpp;		/* color depth : 16 or 24 */
+	u32 frames;		/* frame buffer count : 2 */
+} frame_buf_mark = {
+	.special_mark_1 = (('*' << 24) | ('^' << 16) | ('^' << 8) | ('*' << 0)),
+	.special_mark_2 = (('I' << 24) | ('n' << 16) | ('f' << 8) | ('o' << 0)),
+	.special_mark_3 = (('H' << 24) | ('e' << 16) | ('r' << 8) | ('e' << 0)),
+	.special_mark_4 = (('f' << 24) | ('b' << 16) | ('u' << 8) | ('f' << 0)),
+};
 //}} Mark for GetLog -1/2
-
 #endif /* CONFIG_KERNEL_DEBUG_SEC */
 
-
-
-
-
 #ifdef CONFIG_KERNEL_DEBUG_SEC
-
 //{{ pass platform log to kernel - 1/3
+static char klog_buf[512];
 
-static char klog_buf[256];
+static void __sec_getlog_supply_fbinfo(void *p_fb, u32 xres, u32 yres,
+				       u32 bpp, u32 frames)
+{
+	if (p_fb) {
+		pr_debug("%s: 0x%p %d %d %d %d\n", __func__, p_fb, xres, yres,
+			bpp, frames);
+		frame_buf_mark.p_fb = p_fb;
+		frame_buf_mark.xres = xres;
+		frame_buf_mark.yres = yres;
+		frame_buf_mark.bpp = bpp;
+		frame_buf_mark.frames = frames;
+	}
+}
 
+/* TODO: currently there is no other way than injecting this function .*/
+void sec_getlog_supply_fbinfo(struct fb_info *fb)
+{
+	__sec_getlog_supply_fbinfo((void *)fb->fix.smem_start,
+				   fb->var.xres,
+				   fb->var.yres,
+				   fb->var.bits_per_pixel, 2);
+}
+EXPORT_SYMBOL(sec_getlog_supply_fbinfo);
 //}} pass platform log to kernel - 1/3
-
 #endif /* CONFIG_KERNEL_DEBUG_SEC */
 
 /*

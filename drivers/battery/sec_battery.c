@@ -2371,10 +2371,15 @@ ssize_t sec_bat_store_attrs(
 			dev_info(battery->dev,
 				"%s: siop level: %d\n", __func__, x);
 			battery->pdata->siop_level = x;
-			if (battery->cable_type == POWER_SUPPLY_TYPE_MAINS)
+
+			if (battery->cable_type == POWER_SUPPLY_TYPE_MAINS ||
+			    battery->cable_type == POWER_SUPPLY_TYPE_MISC)
+			{
 				value.intval = 1500;
-			psy_do_property("sec-charger", set,
-					POWER_SUPPLY_PROP_CURRENT_NOW, value);
+				psy_do_property("sec-charger", set,
+						POWER_SUPPLY_PROP_CURRENT_NOW, value);
+			}
+
 			ret = count;
 		}
 		break;
