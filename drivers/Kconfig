@@ -147,4 +147,6 @@ source "drivers/virt/Kconfig"
 source "drivers/devfreq/Kconfig"
 
 source "drivers/sensors/Kconfig"
+
+source "drivers/marvell/Kconfig"
 endmenu
