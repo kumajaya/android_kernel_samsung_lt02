@@ -118,6 +118,20 @@ static struct pm_qos_object ddr_devfreq_min_pm_qos = {
 	.constraints = &ddr_devfreq_min_constraints,
 	.name = "ddr_devfreq_min",
 };
+
+static BLOCKING_NOTIFIER_HEAD(ddr_devfreq_max_notifier);
+static struct pm_qos_constraints ddr_devfreq_max_constraints = {
+	.list = PLIST_HEAD_INIT(ddr_devfreq_max_constraints.list),
+	.target_value = PM_QOS_DEFAULT_VALUE,
+	.default_value = PM_QOS_DEFAULT_VALUE,
+	.type = PM_QOS_MIN,
+	.notifiers = &ddr_devfreq_max_notifier,
+};
+static struct pm_qos_object ddr_devfreq_max_pm_qos = {
+	.constraints = &ddr_devfreq_max_constraints,
+	.name = "ddr_devfreq_max",
+};
+
 #endif
 
 static BLOCKING_NOTIFIER_HEAD(cpu_freq_min_notifier);
@@ -148,6 +162,26 @@ static struct pm_qos_object cpu_freq_max_pm_qos = {
 	.name = "cpu_freq_max",
 };
 
+#define DECLARE_GPU_NOTIFIER(CORE, MINMAX, TYPE) \
+	static BLOCKING_NOTIFIER_HEAD(gpu_freq_##CORE##_##MINMAX##_notifier); \
+	static struct pm_qos_constraints gpu_freq_##CORE##_##MINMAX##_constraints = { \
+		.list = PLIST_HEAD_INIT(gpu_freq_##CORE##_##MINMAX##_constraints.list), \
+		.notifiers = &gpu_freq_##CORE##_##MINMAX##_notifier, \
+		.default_value = 0, \
+		.target_value = 0, \
+		.type = TYPE, \
+	}; \
+	static struct pm_qos_object gpu_freq_##CORE##_##MINMAX##_pm_qos = { \
+		.constraints = &gpu_freq_##CORE##_##MINMAX##_constraints, \
+		.name = "gpu_freq_"#CORE"_"#MINMAX, \
+	};
+
+DECLARE_GPU_NOTIFIER(3d, min, PM_QOS_MAX);
+DECLARE_GPU_NOTIFIER(2d, min, PM_QOS_MAX);
+DECLARE_GPU_NOTIFIER(sh, min, PM_QOS_MAX);
+DECLARE_GPU_NOTIFIER(3d, max, PM_QOS_MIN);
+DECLARE_GPU_NOTIFIER(2d, max, PM_QOS_MIN);
+DECLARE_GPU_NOTIFIER(sh, max, PM_QOS_MIN);
 
 struct pm_qos_object *pm_qos_array[] = {
 	&null_pm_qos,
@@ -157,9 +191,16 @@ struct pm_qos_object *pm_qos_array[] = {
 	&cpuidle_block_pm_qos,
 #ifdef CONFIG_DDR_DEVFREQ
 	&ddr_devfreq_min_pm_qos,
+	&ddr_devfreq_max_pm_qos,
 #endif
 	&cpu_freq_min_pm_qos,
 	&cpu_freq_max_pm_qos,
+	&gpu_freq_3d_min_pm_qos,
+	&gpu_freq_2d_min_pm_qos,
+	&gpu_freq_sh_min_pm_qos,
+	&gpu_freq_3d_max_pm_qos,
+	&gpu_freq_2d_max_pm_qos,
+	&gpu_freq_sh_max_pm_qos,
 };
 
 static ssize_t pm_qos_power_write(struct file *filp, const char __user *buf,
@@ -721,3 +762,76 @@ static int __init cpufreq_qos_debugfs_init(void)
 	return 0;
 }
 postcore_initcall(cpufreq_qos_debugfs_init);
+
+/**
+ * gpufreq_qos_show - Print information of gpu freq qos min and max.
+ * @m: seq_file to print the statistics into.
+ */
+#define __GPUFREQ_QOS_SHOW(CORE, PM_QOS_CLASS_MIN, PM_QOS_CLASS_MAX) \
+{ \
+	unsigned long flags; \
+	struct pm_qos_object *qos_min, *qos_max; \
+	struct list_head *list_min, *list_max; \
+	struct plist_node *node; \
+	s32 target_min = 0, target_max = 0; \
+	struct pm_qos_request *req; \
+\
+	qos_min = pm_qos_array[PM_QOS_CLASS_MIN]; \
+	list_min = &qos_min->constraints->list.node_list; \
+	qos_max = pm_qos_array[PM_QOS_CLASS_MAX]; \
+	list_max = &qos_max->constraints->list.node_list; \
+\
+	rcu_read_lock(); \
+	spin_lock_irqsave(&pm_qos_lock, flags); \
+\
+	target_min = pm_qos_read_value(qos_min->constraints); \
+	target_max = pm_qos_read_value(qos_max->constraints); \
+\
+	seq_printf(m, #CORE " | Target min %d\n", target_min); \
+	list_for_each_entry(node, list_min, node_list) { \
+		req = container_of(node, struct pm_qos_request, node); \
+		if (node->prio != 0) \
+			seq_printf(m, "Req: %d\t Name: %s\n", \
+				node->prio, req->name); \
+	} \
+	seq_printf(m, "\n"); \
+\
+	seq_printf(m, #CORE " | Target max %d\n", target_max); \
+	list_for_each_entry(node, list_max, node_list) { \
+		req = container_of(node, struct pm_qos_request, node); \
+		if (node->prio != 0) \
+			seq_printf(m, "Req: %d\t Name: %s\n", \
+				node->prio, req->name); \
+	} \
+	seq_printf(m, "\n"); \
+	spin_unlock_irqrestore(&pm_qos_lock, flags); \
+	rcu_read_unlock(); \
+}
+
+static ssize_t gpufreq_qos_show(struct seq_file *m, void *unused)
+{
+	__GPUFREQ_QOS_SHOW(3D, PM_QOS_GPUFREQ_3D_MIN, PM_QOS_GPUFREQ_3D_MAX);
+	__GPUFREQ_QOS_SHOW(2D, PM_QOS_GPUFREQ_2D_MIN, PM_QOS_GPUFREQ_2D_MAX);
+	__GPUFREQ_QOS_SHOW(SH, PM_QOS_GPUFREQ_SH_MIN, PM_QOS_GPUFREQ_SH_MAX);
+	return 0;
+}
+
+static int gpufreq_qos_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, gpufreq_qos_show, NULL);
+}
+
+const struct file_operations gpufreq_qos_fops = {
+	.owner = THIS_MODULE,
+	.open = gpufreq_qos_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+};
+
+static int __init gpufreq_qos_debugfs_init(void)
+{
+	debugfs_create_file("gpufreq_qos",
+			S_IRUGO, NULL, NULL, &gpufreq_qos_fops);
+	return 0;
+}
+postcore_initcall(gpufreq_qos_debugfs_init);
