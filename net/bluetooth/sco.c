@@ -373,13 +373,6 @@ static void __sco_sock_close(struct sock *sk)
 	case BT_CONNECTED:
 	case BT_CONFIG:
 		if (sco_pi(sk)->conn) {
-			/* disable PCM first, then disconnect SCO connection*/
-			struct hci_cp_disable_pcm cp;
-			cp.handle =
-				cpu_to_le16((sco_pi(sk))->conn->hcon->handle);
-			cp.enable = 0;
-			hci_send_cmd(sco_pi(sk)->conn->hcon->hdev,
-				HCI_OP_DISABLE_PCM, sizeof(cp), &cp);
 			sk->sk_state = BT_DISCONN;
 			sco_sock_set_timer(sk, SCO_DISCONN_TIMEOUT);
 			hci_conn_put(sco_pi(sk)->conn->hcon);

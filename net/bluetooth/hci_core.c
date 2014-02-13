@@ -1852,6 +1852,11 @@ int hci_register_dev(struct hci_dev *hdev)
 
 err_wqueue:
 	destroy_workqueue(hdev->workqueue);
+	/* CQ00024056: bt kernel panic when do bt stree test with
+	AP connected, iperf, play streaming */
+	/* Chenxi Wang, 2012/11/29 */
+	/* to be safe, need set workqueue as null */
+	hdev->workqueue = NULL;
 err:
 	write_lock(&hci_dev_list_lock);
 	list_del(&hdev->list);
@@ -1880,6 +1885,8 @@ void hci_unregister_dev(struct hci_dev *hdev)
 	for (i = 0; i < NUM_REASSEMBLY; i++)
 		kfree_skb(hdev->reassembly[i]);
 
+	cancel_work_sync(&hdev->power_on);
+
 	if (!test_bit(HCI_INIT, &hdev->flags) &&
 				!test_bit(HCI_SETUP, &hdev->dev_flags)) {
 		hci_dev_lock(hdev);
@@ -1901,8 +1908,12 @@ void hci_unregister_dev(struct hci_dev *hdev)
 	hci_del_sysfs(hdev);
 
 	cancel_delayed_work_sync(&hdev->adv_work);
-
 	destroy_workqueue(hdev->workqueue);
+	/* CQ00024056: bt kernel panic when do bt stree test with
+	AP connected, iperf, play streaming */
+	/* Chenxi Wang, 2012/11/29 */
+	/* to be safe, need set workqueue as null */
+	hdev->workqueue = NULL;
 
 	hci_dev_lock(hdev);
 	hci_blacklist_clear(hdev);
@@ -2205,7 +2216,16 @@ int hci_send_cmd(struct hci_dev *hdev, __u16 opcode, __u32 plen, void *param)
 		hdev->init_last_cmd = opcode;
 
 	skb_queue_tail(&hdev->cmd_q, skb);
-	queue_work(hdev->workqueue, &hdev->cmd_work);
+	/* CQ00024056: bt kernel panic when do bt stree test with AP connected,
+	iperf, play streaming */
+	/* Chenxi Wang, 2012/11/29 */
+	/* to be safe, need check hdev->workqueue whether it's null or not */
+	if (hdev->workqueue)
+		queue_work(hdev->workqueue, &hdev->cmd_work);
+	else {
+		BT_ERR("hci_send_cmd error! hdev->workqueue is null");
+		return -EAGAIN;
+	}
 
 	return 0;
 }

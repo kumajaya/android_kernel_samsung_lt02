@@ -436,8 +436,12 @@ static void hci_cc_write_ssp_mode(struct hci_dev *hdev, struct sk_buff *skb)
 	BT_DBG("%s status 0x%x", hdev->name, status);
 
 	sent = hci_sent_cmd_data(hdev, HCI_OP_WRITE_SSP_MODE);
-	if (!sent)
+	if (!sent) {
+		if (hdev->sent_cmd &&
+			(!test_bit(HCI_SSP_ENABLED, &hdev->dev_flags)))
+			set_bit(HCI_SSP_ENABLED, &hdev->dev_flags);
 		return;
+	}
 
 	if (test_bit(HCI_MGMT, &hdev->dev_flags))
 		mgmt_ssp_enable_complete(hdev, *((u8 *) sent), status);

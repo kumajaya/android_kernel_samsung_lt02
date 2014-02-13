@@ -116,6 +116,11 @@ void hci_conn_add_sysfs(struct hci_conn *conn)
 {
 	struct hci_dev *hdev = conn->hdev;
 
+	if (device_is_registered(&conn->dev)) {
+		BT_ERR("Duplicate register connection device");
+		return;
+	}
+
 	BT_DBG("conn %p", conn);
 
 	dev_set_name(&conn->dev, "%s:%d", hdev->name, conn->handle);

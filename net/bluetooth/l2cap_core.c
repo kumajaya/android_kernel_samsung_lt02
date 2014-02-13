@@ -2576,6 +2576,13 @@ static void l2cap_conf_rfc_get(struct l2cap_chan *chan, void *rsp, int len)
 	unsigned long val;
 	struct l2cap_conf_rfc rfc;
 
+	rfc.mode            = L2CAP_MODE_BASIC;
+	rfc.txwin_size      = 0;
+	rfc.max_transmit    = 0;
+	rfc.retrans_timeout = 0;
+	rfc.monitor_timeout = 0;
+	rfc.max_pdu_size    = 0;
+
 	BT_DBG("chan %p, rsp %p, len %d", chan, rsp, len);
 
 	if ((chan->mode != L2CAP_MODE_ERTM) && (chan->mode != L2CAP_MODE_STREAMING))

@@ -327,14 +327,7 @@ source "net/ax25/Kconfig"
 source "net/can/Kconfig"
 source "net/irda/Kconfig"
 source "net/bluetooth/Kconfig"
-source "net/bluetooth_mgmt/Kconfig"
 source "net/rxrpc/Kconfig"
-
-config BT_W8787
-	bool "Enable W8787 driver"
-	default n
-	help
-	  Adds Marvell driver for Marvell W8787 chipset
 
 config FIB_RULES
 	bool

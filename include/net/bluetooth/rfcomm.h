@@ -20,9 +20,7 @@
    COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS, RELATING TO USE OF THIS
    SOFTWARE IS DISCLAIMED.
 */
-#if defined(CONFIG_BT_TIZEN)
-#include "tizen/rfcomm.h"
-#else
+
 #ifndef __RFCOMM_H
 #define __RFCOMM_H
 
@@ -162,7 +160,6 @@ struct rfcomm_session {
 	unsigned long    flags;
 	atomic_t         refcnt;
 	int              initiator;
-	int              acceptor_inc;
 
 	/* Default DLC parameters */
 	int    cfc;
@@ -214,6 +211,7 @@ struct rfcomm_dlc {
 #define RFCOMM_AUTH_ACCEPT  6
 #define RFCOMM_AUTH_REJECT  7
 #define RFCOMM_DEFER_SETUP  8
+#define RFCOMM_ENC_DROP     9
 
 /* Scheduling flags and events */
 #define RFCOMM_SCHED_WAKEUP 31
@@ -372,4 +370,3 @@ static inline void rfcomm_cleanup_ttys(void)
 }
 #endif
 #endif /* __RFCOMM_H */
-#endif /* CONFIG_BT_TIZEN */
