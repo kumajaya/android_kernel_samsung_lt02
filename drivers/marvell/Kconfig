@@ -1,2 +1,17 @@
-config USES_IN_KERNEL_GC1000
+#
+# Marvell in-kernel driver configuration
+#
+
+menuconfig MARVELL_IN_KERNEL
+	bool "Marvell in-kernel driver support for Tab 3 7.0"
+	depends on MACH_LT02
+
+if MARVELL_IN_KERNEL
+
+config MARVELL_IN_KERNEL_GC1000
 	bool "Use in-kernel GC1000 GPU driver"
+
+config MARVELL_IN_KERNEL_SD8787
+	bool "Use in-kernel SD8787 driver for wireless support"
+
+endif # MARVELL_IN_KERNEL

@@ -1,1 +1,2 @@
-obj-$(CONFIG_USES_IN_KERNEL_GC1000)	+= graphics/galcore_src/
+obj-$(CONFIG_MARVELL_IN_KERNEL_GC1000)	+= graphics/galcore_src/
+obj-$(CONFIG_MARVELL_IN_KERNEL_SD8787)	+= sd8787/

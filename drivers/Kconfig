@@ -2,6 +2,8 @@ menu "Device Drivers"
 
 source "drivers/base/Kconfig"
 
+source "drivers/marvell/Kconfig"
+
 source "drivers/connector/Kconfig"
 
 source "drivers/mtd/Kconfig"
@@ -147,6 +149,4 @@ source "drivers/virt/Kconfig"
 source "drivers/devfreq/Kconfig"
 
 source "drivers/sensors/Kconfig"
-
-source "drivers/marvell/Kconfig"
 endmenu
