@@ -3805,6 +3805,7 @@ wlan_11h_channel_check_req(IN pmlan_adapter pmadapter,
 {
 	pmlan_private pmpriv = MNULL;
 	mlan_status ret = MLAN_STATUS_FAILURE;
+	t_u8 chan_width = CHAN_BW_20MHZ;
 
 	ENTER();
 

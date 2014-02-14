@@ -41,7 +41,7 @@ struct char_dev {
 	struct list_head list;
 	int minor;
 	int dev_type;
-	struct cdev cdev;
+	struct cdev *cdev;
 	struct m_dev *m_dev;
 	struct kobject kobj;
 };

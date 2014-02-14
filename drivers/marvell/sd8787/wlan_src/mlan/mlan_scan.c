@@ -2458,6 +2458,12 @@ wlan_scan_process_results(IN mlan_private * pmpriv)
 							      curr_bcn_buf_lock);
 		} else {
 			wlan_restore_curr_bcn(pmpriv);
+
+			/** append current AP to the end of scan table */
+			if(pmadapter->num_in_scan_table < MRVDRV_MAX_BSSID_LIST)
+				pmadapter->num_in_scan_table++;  
+			memcpy(pmadapter, &pmadapter->pscan_table[pmadapter->num_in_scan_table-1], &pmpriv->curr_bss_params.bss_descriptor,
+				sizeof(pmpriv->curr_bss_params.bss_descriptor));
 		}
 	}
 

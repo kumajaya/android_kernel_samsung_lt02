@@ -153,6 +153,7 @@ wlan_ret_802_11_rssi_info(IN pmlan_private pmpriv,
 
 	/* Get current BSS info */
 	pbss_desc = &pmpriv->curr_bss_params.bss_descriptor;
+	pbss_desc->rssi = -pmpriv->bcn_rssi_avg;
 	tbl_idx =
 		wlan_find_ssid_in_list(pmpriv, &pbss_desc->ssid,
 				       pbss_desc->mac_address,

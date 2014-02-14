@@ -411,9 +411,24 @@ chardev_open(struct inode *inode, struct file *filp)
 	int ret = 0;
 	struct char_dev *dev = NULL;
 	struct m_dev *m_dev = NULL;
+	struct char_dev *cdev = NULL;
+	struct list_head *p = NULL;
 	ENTER();
 
-	dev = container_of(inode->i_cdev, struct char_dev, cdev);
+	//dev = container_of(inode->i_cdev, struct char_dev, cdev);
+	list_for_each(p, &char_dev_list) {
+		cdev = list_entry(p, struct char_dev, list);
+		if (mbtchar_major == MAJOR(inode->i_cdev->dev) && cdev->minor == MINOR(inode->i_cdev->dev)){
+			dev = cdev;
+			break;
+		}
+	}
+	if(!dev){
+		PRINTM(ERROR, "cannot find dev from inode\n");
+		LEAVE();
+		return -ENXIO;
+	}
+	
 	if (!chardev_get(dev)) {
 		LEAVE();
 		return -ENXIO;
@@ -546,11 +561,12 @@ register_char_dev(struct char_dev *dev, struct class *char_class,
 		/* Store the allocated dev major # */
 		mbtchar_major = MAJOR(dev_num);
 	}
-	cdev_init(&dev->cdev, &chardev_fops);
-	dev->cdev.owner = chardev_fops.owner;
+	dev->cdev = cdev_alloc();
+	dev->cdev->ops = &chardev_fops;
+	dev->cdev->owner = chardev_fops.owner;
 	dev_num = MKDEV(mbtchar_major, dev->minor);
 
-	if (cdev_add(&dev->cdev, dev_num, 1)) {
+	if (cdev_add(dev->cdev, dev_num, 1)) {
 		PRINTM(ERROR, "chardev: cdev_add failed\n");
 		ret = -EFAULT;
 		goto free_cdev_region;
@@ -620,7 +636,7 @@ unregister_char_dev(struct char_dev *dev, struct class *char_class,
 {
 	ENTER();
 	device_destroy(char_class, MKDEV(mbtchar_major, dev->minor));
-	cdev_del(&dev->cdev);
+	cdev_del(dev->cdev);
 	unregister_chrdev_region(MKDEV(mbtchar_major, dev->minor), 1);
 	PRINTM(INFO, "unregister char dev=%s\n", dev_name);
 
