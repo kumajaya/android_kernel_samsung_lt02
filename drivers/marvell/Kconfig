@@ -14,4 +14,13 @@ config MARVELL_IN_KERNEL_GC1000
 config MARVELL_IN_KERNEL_SD8787
 	bool "Use in-kernel SD8787 driver for wireless support"
 
+config MARVELL_IN_KERNEL_TELEPHONY
+	bool "Use in-kernel telephony driver"
+
+config MARVELL_IN_KERNEL_GEU
+	bool "Use in-kernel Generic Encrypt Uint driver"
+
+config MARVELL_IN_KERNEL_PHYSRW
+	bool "Use in-kernel physrw driver"
+
 endif # MARVELL_IN_KERNEL
