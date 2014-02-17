@@ -451,9 +451,9 @@ static void fb_do_show_logo(struct fb_info *info, struct fb_image *image,
 	image->dx = (info->var.xres - image->width) >> 1;
 	image->dy = (info->var.yres - image->height) >> 1;
 
-	if (image->dx < 0)
+	if (image->dx <= 0)
 		image->dx = 0;
-	if (image->dy < 0)
+	if (image->dy <= 0)
 		image->dy = 0;
 	if (rotate == FB_ROTATE_UR || rotate == FB_ROTATE_UD) {
 		if (image->dx > info->var.xres)

@@ -53,13 +53,14 @@
 #define DUMB_MODE_RGB444_UPPER		5
 #define DUMB_MODE_RGB888		6
 
+#define MAX_FB_INFO	(3)
+
 /* default fb buffer size WVGA-32bits */
 #if defined(CONFIG_MACH_LT02) || defined(CONFIG_MACH_COCOA7)
-#define DEFAULT_FB_SIZE	((1024 * 600 * 4 * 3)+ 4096)
+#define DEFAULT_FB_SIZE	((1024 * 600 * 12)+ 4096)
 #else
 #define DEFAULT_FB_SIZE	((800 * 480 * 8)+ 4096)
 #endif
-
 /*
  * Buffer pixel format
  * bit0 is for rb swap.
@@ -81,6 +82,10 @@
 #define PIX_FMT_YVU422PLANAR	13
 #define PIX_FMT_YUV420PLANAR	14
 #define PIX_FMT_YVU420PLANAR	15
+#define PIX_FMT_RGB888A		22
+#define PIX_FMT_BGR888A		23
+#define PIX_FMT_YUV420SEMIPLANAR	24
+#define PIX_FMT_YVU420SEMIPLANAR	25
 #define PIX_FMT_PSEUDOCOLOR	20
 #define PIX_FMT_YUYV422PACK	(0x1000|PIX_FMT_YUV422PACK)
 #define PIX_FMT_YUV422PACK_IRE_90_270	(0x1000|PIX_FMT_RGB888UNPACK)
@@ -112,6 +117,7 @@ struct regshadow {
 
 	/* video mode */
 	u32	dma_ctrl0;
+	u32	yuv420sp_ctrl;
 
 	/* viewport info*/
 	u32	pitch[2];
@@ -166,10 +172,15 @@ struct pxa168fb_info {
 	atomic_t		op_count;
 	atomic_t		irq_en_count;
 	atomic_t		w_intr;
+	atomic_t		w_intr1;
 	atomic_t		vsync_cnt;
 	wait_queue_head_t	w_intr_wq;
+	wait_queue_head_t	w_intr_wq1;
 	struct mutex		access_ok;
+	struct mutex		output_lock;
+	spinlock_t		job_lock;
 	spinlock_t		buf_lock;
+	spinlock_t		dfc_lock;
 	struct _sOvlySurface    surface;
 	struct _sOvlySurface    surface_bak;
 	struct regshadow	shadowreg;
@@ -181,6 +192,7 @@ struct pxa168fb_info {
 	int			debug;
 	unsigned		is_blanked:1,
 				surface_set:1,
+				output_on:1,
 				active:1;
 	/* indicate dma on/off requirement from user space */
 	int			dma_on;
@@ -198,7 +210,7 @@ struct pxa168fb_info {
 	unsigned                vsync_en;
 	uint64_t		vsync_ts_nano;
 	struct work_struct	vsync_work;
-	struct delayed_work	panic_work;
+	struct workqueue_struct	*workqueue;
 
 	/* Compatibility mode global switch .....
 	 *
@@ -222,14 +234,21 @@ struct pxa168fb_info {
 	/* gamma correction */
 	struct mvdisp_gamma	gamma;
 	struct pm_qos_request   qos_idle;
+	/*
+	 * separated display clock
+	 * controller clock is for reg access - bind with pm runtime
+	 * path clock is for each path
+	 * phy clock is for dsi/hdmi phy (in case we have)
+	*/
+	struct clk	*path_clk;
+	struct clk	*phy_clk;
 #ifdef VSYNC_DSI_CMD
 		//wait_queue_head_t vsync_detect_wq;
 		//int vsync_detected;
 		struct mutex cmd_mutex; /* Frequency change mutex */
 		struct mutex vsync_mutex; /* Frequency change mutex */
 
-#endif	
-	
+#endif
 };
 
 struct dsi_phy {
@@ -302,20 +321,37 @@ struct cmu_res {
 	int height;
 };
 
+struct pxa168fb_lcd_platform_driver {
+	int (*reset)(struct pxa168fb_info *);
+	int (*power)(struct pxa168fb_info *, int on);
+};
+
+struct pxa168fb_mipi_lcd_driver {
+	int (*probe)(struct pxa168fb_info *);
+	int (*reset)(struct pxa168fb_info *);    
+	int (*init)(struct pxa168fb_info *);
+	int (*enable)(struct pxa168fb_info *);
+	int (*disable)(struct pxa168fb_info *);
+};
+
 /*
  * PXA fb machine information
  */
 struct pxa168fb_mach_info {
 	char	id[16];
-	unsigned int	sclk_src;
+	union {
+		unsigned int	sclk_src;     /* source clk rate */
+		unsigned int 	sclk_default; /* unit MHz */
+	};
 	unsigned int	sclk_div;
+	unsigned int	sclk_rst;
 
 	int		num_modes;
 	struct fb_videomode *modes;
 	unsigned int max_fb_size;
 	unsigned int xres_virtual;
-	/* recovery mode of system */
-
+	unsigned int xres_alignment;
+	unsigned int yres_alignment;
 
 	/*
 	 * Pix_fmt
@@ -383,10 +419,18 @@ struct pxa168fb_mach_info {
 	void		*phy_info;
 
 	/*
+	 * for AMOLED panel
+	 */
+	unsigned int	last_dummy_lines;
+
+	/*
 	 * vdma option
 	 */
 	unsigned int vdma_enable;
 	unsigned int sram_size;
+	unsigned int height;			/* height of picture in mm    */
+	unsigned int width;			/* width of picture in mm     */
+
 	/*
 	 * power on/off function.
 	 */
@@ -396,11 +440,14 @@ struct pxa168fb_mach_info {
 	/*
 	 * dsi to dpi setting function
 	 */
-	int (*dsi2dpi_set)(struct pxa168fb_info *);
-	int (*xcvr_reset)(struct pxa168fb_info *);
+	int (*exter_brige_init)(struct pxa168fb_info *);
+	int (*exter_brige_pwr)(struct pxa168fb_info *, int on);
 
 	/* init config for panel via dsi */
 	void (*dsi_panel_config)(struct pxa168fb_info *);
+
+	struct pxa168fb_lcd_platform_driver *lcd_platform_driver;
+	struct pxa168fb_mipi_lcd_driver *lcd_driver;
 	/*
 	 * special ioctls
 	 */
@@ -408,10 +455,14 @@ struct pxa168fb_mach_info {
 	/*CMU platform calibration*/
 	struct cmu_calibration cmu_cal[3];
 	struct cmu_calibration cmu_cal_letter_box[3];
+	/*legacy clk flag*/
+	int	no_legacy_clk;
+	const char *path_clk_name;
+	const char *phy_clk_name;
 };
 
 struct fbi_info {
-	struct pxa168fb_info *fbi[3];
+	struct pxa168fb_info *fbi[MAX_FB_INFO];
 };
 
 enum dsi_packet_di {
@@ -419,6 +470,7 @@ enum dsi_packet_di {
 	DSI_DI_DCS_SWRITE = 0x5,
 	/* for set_pixel_format */
 	DSI_DI_DCS_SWRITE1 = 0x15,
+	DSI_DI_GENERIC_LWRITE = 0x29,
 	DSI_DI_DCS_LWRITE = 0x39,
 	DSI_DI_DCS_READ = 0x6,
 	DSI_DI_SET_MAX_PKT_SIZE = 0x37,
@@ -480,7 +532,6 @@ struct dsi_buf {
 	u32 length; /* cmds length */
 	u8 data[DSI_MAX_DATA_BYTES];
 };
-
 extern struct lcd_regs *get_regs(int id);
 extern struct cmu_calibration cmu_cal[3];
 extern struct cmu_calibration cmu_cal_letter_box[3];
@@ -494,6 +545,7 @@ extern void irq_mask_set(int id, u32 mask, u32 val);
 extern void irq_status_clear(int id, u32 mask);
 extern int lcd_clk_get(int id, u32 type);
 extern void lcd_clk_set(int id, u32 type, u32 mask, u32 val);
+extern void yuvsp_fmt_ctrl(u32 mask, u32 value);
 
 extern void pxa988_reserve_fb_mem(void);
 extern int pxa168fb_spi_send(struct pxa168fb_info *fbi, void *cmd,
@@ -507,11 +559,18 @@ extern void irq_unmask_eof(int id);
 #ifdef VSYNC_DSI_CMD
 extern void pxa168_dsi_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds[],
 		int count);
-		
+
 extern void dsi_prepare_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds[],
 		int count, u8 *buffer, u8 *packet_len);
 extern void dsi_send_prepared_cmd_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds,
 		u8 *buffer,u8 len);
+extern void pxa168_dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
+		struct dsi_cmd_desc cmds[], int count);
+extern void dsi_cmd_array_rx_process(struct pxa168fb_info *fbi, struct dsi_buf *dbuf);
+extern void dsi_lanes_reset(struct pxa168fb_info *fbi);
+extern void dsi_lanes_check(struct pxa168fb_info *fbi);
+extern void dsi_lanes_debug(struct pxa168fb_info *fbi);
+
 #endif
 extern void dsi_cmd_array_tx(struct pxa168fb_info *fbi,
 		struct dsi_cmd_desc cmds[], int count);
@@ -527,6 +586,10 @@ extern void dsi_set_panel_interface(struct pxa168fb_info *fbi, bool on);
 extern void dsi_set_panel_intf(struct pxa168fb_info *fbi, bool on);
 /* LVDS related */
 extern int pxa688_lvds_init(struct pxa168fb_info *fbi);
+extern void dsi_dphy_force_ulps_mode(struct pxa168fb_info *fbi);
+extern void dsi_dphy_exit_ulps_mode(struct pxa168fb_info *fbi);
+extern void dsi_ulps_tx_enable(struct pxa168fb_info *fbi, int en);
+void dsi_reset_dsi_module(struct pxa168fb_info *fbi);
 #else
 static inline void dsi_cmd_array_tx(struct pxa168fb_info *fbi,
 		struct dsi_cmd_desc cmds[], int count){}
@@ -538,8 +601,7 @@ static inline void dsi_set_dphy(struct pxa168fb_info *fbi){}
 static inline void dsi_reset(struct pxa168fb_info *fbi, int hold){}
 static inline void dsi_set_controller(struct pxa168fb_info *fbi){}
 static inline void dsi_lanes_enable(struct pxa168fb_info *fbi, int en){}
-static inline void dsi_set_panel_intf(struct pxa168fb_info *fbi, bool on){}
-
+static inline void dsi_set_panel_intf(struct pxa168fb_info *fbi, bool on) {}
 static inline int pxa688_lvds_init(struct pxa168fb_info *fbi)
 {
 	return -EINVAL;
@@ -593,8 +655,8 @@ extern struct fbi_info gfx_info;
 extern struct fbi_info ovly_info;
 #endif
 extern struct device_attribute dev_attr_misc;
-extern void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index, unsigned int panel);
-
+extern void dynamic_change_pll3(unsigned int rate);
+extern int dip_register_notifier(struct notifier_block *nb, unsigned int list);
 #ifdef CONFIG_PXA688_MISC
 extern int pxa688fb_vsmooth_set(int id, int vid, int en);
 extern int pxa688fb_partdisp_set(struct mvdisp_partdisp grap);
@@ -617,6 +679,8 @@ static inline void pxa688fb_partdisp_update(int id) { }
 #define gamma_dump(path, lines)				do {} while(0)
 #define dither_set(fbi, table, mode, enable)	do {} while (0)
 #endif
+
+extern int is_fhd_lcd(void);
 
 #endif /* __KERNEL__ */
 #endif /* __ASM_MACH_PXA168FB_H */

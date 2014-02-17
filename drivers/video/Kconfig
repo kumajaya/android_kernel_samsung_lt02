@@ -1907,6 +1907,16 @@ config PXA688_MISC
 	help
 	  Say Y here if you want to enable vertical smooth, partial display, etc.
 
+config LDI_SUPPORT_MDNIE
+	bool "enable mdnie feature"
+	help
+	  Support the mDNIE feature.
+
+config LCD_ESD_RECOVERY
+	bool "enable esd recovery feature"
+	help
+	  Support esd recovery feature.
+
 config FB_PXA
 	tristate "PXA LCD framebuffer support"
 	depends on FB && ARCH_PXA

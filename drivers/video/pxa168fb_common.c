@@ -5,8 +5,13 @@
 #include <linux/dma-mapping.h>
 #include <linux/uaccess.h>
 #include <linux/vmalloc.h>
-#include <asm/cacheflush.h>
+#include <mach/features.h>
+#include <mach/regs-apmu.h>
 #include "pxa168fb_common.h"
+#include <linux/delay.h>
+#include <asm/cacheflush.h>
+#include <plat/clock.h>
+#include <linux/fb.h>
 
 /* buffer management:
  *    filterBufList: list return to upper layer which indicates buff is free
@@ -158,6 +163,10 @@ int convert_pix_fmt(u32 vmode)
 		return PIX_FMT_YUV420PLANAR;
 	case FB_VMODE_YUV420PLANAR_SWAPUV:
 		return PIX_FMT_YVU420PLANAR;
+	case FB_VMODE_YUV420SEMIPLANAR:
+		return PIX_FMT_YUV420SEMIPLANAR;
+	case FB_VMODE_YUV420SEMIPLANAR_SWAPUV:
+		return PIX_FMT_YVU420SEMIPLANAR;
 	case FB_VMODE_YUV422PACKED_SWAPYUorV:
 		return PIX_FMT_YUYV422PACK;
 	case FB_VMODE_YUV422PACKED_IRE_90_270:
@@ -178,6 +187,10 @@ int convert_pix_fmt(u32 vmode)
 		return PIX_FMT_RGBA888;
 	case FB_VMODE_BGRA888:
 		return PIX_FMT_BGRA888;
+	case FB_VMODE_RGB888A:
+		return PIX_FMT_RGB888A;
+	case FB_VMODE_BGR888A:
+		return PIX_FMT_BGR888A;
 	case FB_VMODE_RGB888UNPACK:
 		return PIX_FMT_RGB888UNPACK;
 	case FB_VMODE_BGR888UNPACK:
@@ -303,7 +316,7 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		var->red.offset = 16;    var->red.length = 8;
 		var->green.offset = 8;   var->green.length = 8;
 		var->blue.offset = 0;    var->blue.length = 8;
-		var->transp.offset = 0;  var->transp.length = 8;
+		var->transp.offset = 0;  var->transp.length = 0;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 7 << 20;
 		break;
@@ -312,7 +325,7 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		var->red.offset = 0;     var->red.length = 8;
 		var->green.offset = 8;   var->green.length = 8;
 		var->blue.offset = 16;   var->blue.length = 8;
-		var->transp.offset = 0;  var->transp.length = 8;
+		var->transp.offset = 0;  var->transp.length = 0;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 7 << 20;
 		break;
@@ -333,6 +346,24 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		var->transp.offset = 24; var->transp.length = 8;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 8 << 20;
+		break;
+	case PIX_FMT_RGB888A:
+		var->bits_per_pixel = 32;
+		var->red.offset = 24;    var->red.length = 8;
+		var->green.offset = 16;   var->green.length = 8;
+		var->blue.offset = 8;    var->blue.length = 8;
+		var->transp.offset = 0; var->transp.length = 8;
+		var->nonstd &= ~0xff0fffff;
+		var->nonstd |= 0xA << 20;
+		break;
+	case PIX_FMT_BGR888A:
+		var->bits_per_pixel = 32;
+		var->red.offset = 8;     var->red.length = 8;
+		var->green.offset = 16;   var->green.length = 8;
+		var->blue.offset = 24;   var->blue.length = 8;
+		var->transp.offset = 0; var->transp.length = 8;
+		var->nonstd &= ~0xff0fffff;
+		var->nonstd |= 0xA << 20;
 		break;
 	case PIX_FMT_YUYV422PACK:
 		var->bits_per_pixel = 16;
@@ -370,7 +401,7 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		break;
 	case PIX_FMT_YUV422PLANAR:
 		var->bits_per_pixel = 16;
-		var->red.offset = 8;	 var->red.length = 8;
+		var->red.offset = 8;    var->red.length = 8;
 		var->green.offset = 4;   var->green.length = 4;
 		var->blue.offset = 0;   var->blue.length = 4;
 		var->transp.offset = 0;  var->transp.length = 0;
@@ -379,7 +410,7 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		break;
 	case PIX_FMT_YVU422PLANAR:
 		var->bits_per_pixel = 16;
-		var->red.offset = 0;	 var->red.length = 8;
+		var->red.offset = 0;    var->red.length = 8;
 		var->green.offset = 8;   var->green.length = 4;
 		var->blue.offset = 12;   var->blue.length = 4;
 		var->transp.offset = 0;  var->transp.length = 0;
@@ -388,21 +419,39 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		break;
 	case PIX_FMT_YUV420PLANAR:
 		var->bits_per_pixel = 12;
-		var->red.offset = 4;	 var->red.length = 8;
-		var->green.offset = 2;   var->green.length = 2;
-		var->blue.offset = 0;   var->blue.length = 2;
+		var->red.offset = 0;    var->red.length = 8;
+		var->green.offset = 8;   var->green.length = 2;
+		var->blue.offset = 10;   var->blue.length = 2;
 		var->transp.offset = 0;  var->transp.length = 0;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 4 << 20;
 		break;
 	case PIX_FMT_YVU420PLANAR:
 		var->bits_per_pixel = 12;
-		var->red.offset = 0;	 var->red.length = 8;
-		var->green.offset = 8;   var->green.length = 2;
-		var->blue.offset = 10;   var->blue.length = 2;
+		var->red.offset = 0;    var->red.length = 8;
+		var->green.offset = 10;   var->green.length = 2;
+		var->blue.offset = 8;   var->blue.length = 2;
 		var->transp.offset = 0;  var->transp.length = 0;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 4 << 20;
+		break;
+	case PIX_FMT_YUV420SEMIPLANAR:
+		var->bits_per_pixel = 12;
+		var->red.offset = 4;    var->red.length = 8;
+		var->green.offset = 0;   var->green.length = 2;
+		var->blue.offset = 2;   var->blue.length = 2;
+		var->transp.offset = 0;  var->transp.length = 0;
+		var->nonstd &= ~0xff0fffff;
+		var->nonstd |= 0xB << 20;
+		break;
+	case PIX_FMT_YVU420SEMIPLANAR:
+		var->bits_per_pixel = 12;
+		var->red.offset = 4;    var->red.length = 8;
+		var->green.offset = 2;   var->green.length = 2;
+		var->blue.offset = 0;   var->blue.length = 2;
+		var->transp.offset = 0;  var->transp.length = 0;
+		var->nonstd &= ~0xff0fffff;
+		var->nonstd |= 0xB << 20;
 		break;
 	/*
 	 * YUV422 Packed will be YUV444 Packed after
@@ -413,7 +462,7 @@ int set_pix_fmt(struct fb_var_screeninfo *var, int pix_fmt)
 		var->red.offset = 16;    var->red.length = 8;
 		var->green.offset = 8;   var->green.length = 8;
 		var->blue.offset = 0;    var->blue.length = 8;
-		var->transp.offset = 0;  var->transp.length = 0;
+		var->transp.offset = 24;  var->transp.length = 0;
 		var->nonstd &= ~0xff0fffff;
 		var->nonstd |= 7 << 20;
 		break;
@@ -444,12 +493,10 @@ int determine_best_pix_fmt(struct fb_var_screeninfo *var,
 		 */
 		if (var->bits_per_pixel == 16 && var->red.length == 16 &&
 			var->green.length == 16 && var->blue.length == 16) {
-			if (var->red.offset >= var->blue.offset) {
-				if (var->red.offset == 4)
-					return PIX_FMT_YUV422PACK;
-				else
-					return PIX_FMT_YUYV422PACK;
-			} else
+			if (var->red.offset >= var->blue.offset)
+				return (var->red.offset == 4)
+					? PIX_FMT_YUV422PACK : PIX_FMT_YUYV422PACK;
+			else
 				return PIX_FMT_YVU422PACK;
 		}
 		/*
@@ -457,74 +504,58 @@ int determine_best_pix_fmt(struct fb_var_screeninfo *var,
 		 */
 		if (var->bits_per_pixel == 16 && var->red.length == 8 &&
 			var->green.length == 4 && var->blue.length == 4 &&
-			fbi->vid) {
-			if (var->red.offset >= var->blue.offset)
-				return PIX_FMT_YUV422PLANAR;
-			else
-				return PIX_FMT_YVU422PLANAR;
-		}
-
+			fbi->vid)
+			return (var->red.offset >= var->blue.offset)
+				? PIX_FMT_YUV422PLANAR : PIX_FMT_YVU422PLANAR;
 		/*
-		 * Check for YUV420PLANAR.
+		 * Check for YUV420PLANAR, YUV420SEMIPLANAR.
 		 */
 		if (var->bits_per_pixel == 12 && var->red.length == 8 &&
 			var->green.length == 2 && var->blue.length == 2 &&
 			 fbi->vid) {
-			if (var->red.offset >= var->blue.offset)
-				return PIX_FMT_YUV420PLANAR;
+			if (var->red.offset == 0)
+				return (var->green.offset <= var->blue.offset)
+					? PIX_FMT_YUV420PLANAR : PIX_FMT_YVU420PLANAR;
 			else
-				return PIX_FMT_YVU420PLANAR;
+				return (var->green.offset <= var->blue.offset)
+					? PIX_FMT_YUV420SEMIPLANAR : PIX_FMT_YVU420SEMIPLANAR;
 		}
 		/*
 		 * Check for 565/1555.
 		 */
 		if (var->bits_per_pixel == 16 && var->red.length <= 5 &&
 		    var->green.length <= 6 && var->blue.length <= 5) {
-			if (var->transp.length == 0) {
-				if (var->red.offset >= var->blue.offset)
-					return PIX_FMT_RGB565;
-				else
-					return PIX_FMT_BGR565;
-			}
-
-			if (var->transp.length == 1 && var->green.length <= 5) {
-				if (var->red.offset >= var->blue.offset)
-					return PIX_FMT_RGB1555;
-				else
-					return PIX_FMT_BGR1555;
-			}
-
+			if (var->transp.length == 0)
+				return (var->red.offset >= var->blue.offset)
+					? PIX_FMT_RGB565 : PIX_FMT_BGR565;
+			else if (var->transp.length == 1 && var->green.length <= 5)
+				return (var->red.offset >= var->blue.offset)
+					? PIX_FMT_RGB1555 : PIX_FMT_BGR1555;
 			/* fall through */
 		}
 
 		/*
-		 * Check for 888/A888.
+		 * Check for 888/A888/888A.
 		 */
 		if (var->bits_per_pixel <= 32 && var->red.length <= 8 &&
-		    var->green.length <= 8 && var->blue.length <= 8) {
+			var->green.length <= 8 && var->blue.length <= 8) {
 			if (var->bits_per_pixel == 24 &&
-				 var->transp.length == 0) {
-				if (var->red.offset >= var->blue.offset)
-					return PIX_FMT_RGB888PACK;
-				else
-					return PIX_FMT_BGR888PACK;
-			}
-
-			if (var->bits_per_pixel == 32 &&
-				 var->transp.offset == 24) {
-				if (var->red.offset >= var->blue.offset)
-					return PIX_FMT_RGBA888;
-				else
-					return PIX_FMT_BGRA888;
-			} else {
-				if (var->transp.length == 8) {
-					if (var->red.offset >= var->blue.offset)
-						return PIX_FMT_RGB888UNPACK;
+				var->transp.length == 0)
+				return (var->red.offset >= var->blue.offset)
+					? PIX_FMT_RGB888PACK : PIX_FMT_BGR888PACK;
+			else if (var->bits_per_pixel == 32) {
+				if (0 == var->transp.offset)
+					return (var->red.offset >= var->blue.offset)
+						? PIX_FMT_RGB888UNPACK : PIX_FMT_BGR888UNPACK;
+				else if (8 == var->transp.length) {
+					if (24 == var->transp.offset)
+						return (var->red.offset >= var->blue.offset)
+							? PIX_FMT_RGBA888 : PIX_FMT_BGRA888;
 					else
-						return PIX_FMT_BGR888UNPACK;
+						return (var->red.offset >= var->blue.offset)
+							? PIX_FMT_RGB888A : PIX_FMT_BGR888A;
 				} else
 					return PIX_FMT_YUV422PACK_IRE_90_270;
-
 			}
 			/* fall through */
 		}
@@ -535,7 +566,6 @@ int determine_best_pix_fmt(struct fb_var_screeninfo *var,
 		switch (pxa_format) {
 		case 0:
 			return PIX_FMT_RGB565;
-			break;
 		case 3:
 			if (fbi->vid)
 				return PIX_FMT_YUV422PLANAR;
@@ -546,20 +576,20 @@ int determine_best_pix_fmt(struct fb_var_screeninfo *var,
 			break;
 		case 5:
 			return PIX_FMT_RGB1555;
-			break;
 		case 6:
 			return PIX_FMT_RGB888PACK;
-			break;
 		case 7:
 			return PIX_FMT_RGB888UNPACK;
-			break;
 		case 8:
 			return PIX_FMT_RGBA888;
-			break;
 		case 9:
 			return PIX_FMT_YUV422PACK;
+		case 0xA:
+			return PIX_FMT_RGB888A;
+		case 0xB:
+			if (fbi->vid)
+				return PIX_FMT_YUV420SEMIPLANAR;
 			break;
-
 		default:
 			return -EINVAL;
 		}
@@ -586,8 +616,7 @@ int pxa168fb_check_var(struct fb_var_screeninfo *var, struct fb_info *fi)
 
 	if ((var->nonstd >> 24) == 0xAA)
 		fbi->compat_mode = 0x2625;
-
-	if ((var->nonstd >> 24) == 0x55)
+	else if ((var->nonstd >> 24) == 0x55)
 		fbi->compat_mode = 0x0;
 
 	/*
@@ -865,6 +894,7 @@ int flip_buffer_vsync(struct fb_info *info, unsigned long arg)
 	u8 *start_addr[3], *input_data;
 	int ret;
 
+	memset(&shadowreg, 0, sizeof(shadowreg));
 	mutex_lock(&fbi->access_ok);
 
 	/* Get user-mode data. */
@@ -914,7 +944,6 @@ failed:
 	mutex_unlock(&fbi->access_ok);
 	return -EFAULT;
 }
-
 
 int flip_buffer(struct fb_info *info, unsigned long arg)
 {
@@ -987,7 +1016,6 @@ int flip_buffer(struct fb_info *info, unsigned long arg)
 				/* we update immediately if only addr update */
 				if (shadowreg->flags == UPDATE_ADDR)
 					pxa168fb_set_regs(fbi, shadowreg);
-
 				list_add_tail(&shadowreg_list->dma_queue,
 					&fbi->buf_waitlist.dma_queue);
 				ret = 0;
@@ -1057,8 +1085,9 @@ int flip_buffer(struct fb_info *info, unsigned long arg)
 			info->screen_base = fbi->fb_start;
 			info->screen_size = fbi->fb_size;
 		}
-		kfree(shadowreg_list);
 	}
+
+	kfree(shadowreg_list);
 	mutex_unlock(&fbi->access_ok);
 
 	return ret;
@@ -1137,7 +1166,7 @@ void set_dma_active(struct pxa168fb_info *fbi)
 	value = active ? enable : 0;
 
 	/* don't enalbe graphic dma for pxa988 z1/z2 series */
-	if ((cpu_pxa98x_stepping() < PXA98X_Z3) && !fbi->vid)
+	if (has_feat_video_replace_graphics_dma() && !fbi->vid)
 		value = 0;
 
 	/* if video layer is full screen without alpha blending
@@ -1196,33 +1225,27 @@ int dispd_dma_enabled(struct pxa168fb_info *fbi)
 void clear_dispd_irq(struct pxa168fb_info *fbi)
 {
 	int isr = readl(fbi->reg_base + SPU_IRQ_ISR);
-	int isr_en = 0;
 
 	if ((isr & display_done_imask(fbi->id))) {
 		irq_status_clear(fbi->id, display_done_imask(fbi->id));
-		isr_en = readl(fbi->reg_base + SPU_IRQ_ENA);
-		pr_info("fbi %d irq miss, clear isr %x, \n", fbi->id, isr);
-		pr_info("fbi %d isr_en 0x%x, %d\n", fbi->id, isr_en, atomic_read(&fbi->irq_en_count));
-	} else {
-		isr_en = readl(fbi->reg_base + SPU_IRQ_ENA);
-		printk("%s, wait for vsync timeout!!! \n", __func__);
-		pr_info("1 fbi %d irq miss, clear isr %x, \n", fbi->id, isr);
-		pr_info("2 fbi %d isr_en 0x%x, %d\n", fbi->id, isr_en, atomic_read(&fbi->irq_en_count));
+		pr_info("fbi %d irq miss, clear isr %x\n", fbi->id, isr);
 	}
-
 }
 
 void irq_mask_eof(int id)
 {
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 	struct pxa168fb_info *fbi = gfx_info.fbi[id];
 	int irq_mask = display_done_imask(fbi->id);
 
+#ifdef CONFIG_DISP_DFC
+	irq_mask |= vsync_imask(fbi->id);
+#endif
 	spin_lock(&fbi->var_lock);
 	if (atomic_dec_and_test(&fbi->irq_en_count)) {
 		if (fbi->active) {
 			irq_mask_set(fbi->id, irq_mask, 0);
-			if (cpu_pxa98x_stepping() > PXA98X_Z2)
+			if (!has_feat_video_replace_graphics_dma())
 				pm_qos_update_request(&fbi->qos_idle,
 					PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
 		} else {
@@ -1230,26 +1253,27 @@ void irq_mask_eof(int id)
 			pr_err("%s: LCD is suspended, do nothing\n", __func__);
 		}
 	}
-	if (atomic_read(&fbi->irq_en_count) < 0)
-	printk("######## %s: irq enable count %d\n", __func__,
-		atomic_read(&fbi->irq_en_count));
 	spin_unlock(&fbi->var_lock);
 
 	dev_dbg(fbi->dev, "mask eof intr: irq enable count %d\n",
 		atomic_read(&fbi->irq_en_count));
 #endif
+
 }
 
 void irq_unmask_eof(int id)
 {
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 	struct pxa168fb_info *fbi = gfx_info.fbi[id];
 	int irq_mask = display_done_imask(fbi->id);
+#ifdef CONFIG_DISP_DFC
+	irq_mask |= vsync_imask(fbi->id);
+#endif
 
 	spin_lock(&fbi->var_lock);
 	if (!atomic_read(&fbi->irq_en_count)) {
 		if (fbi->active) {
-			if (cpu_pxa98x_stepping() > PXA98X_Z2)
+			if (!has_feat_video_replace_graphics_dma())
 				pm_qos_update_request(&fbi->qos_idle,
 					PM_QOS_CPUIDLE_BLOCK_AXI_VALUE);
 			irq_status_clear(fbi->id, irq_mask);
@@ -1259,9 +1283,6 @@ void irq_unmask_eof(int id)
 			pr_err("%s: LCD is suspended, do nothing\n", __func__);
 		}
 	}
-	if (atomic_read(&fbi->irq_en_count) < 0)
-	printk("######## %s: irq enable count %d\n", __func__,
-		atomic_read(&fbi->irq_en_count));
 	atomic_inc(&fbi->irq_en_count);
 	spin_unlock(&fbi->var_lock);
 
@@ -1272,13 +1293,14 @@ void irq_unmask_eof(int id)
 
 void wait_for_vsync(struct pxa168fb_info *fbi, unsigned char param)
 {
-	struct fbi_info *info = fbi->vid ? &ovly_info : &gfx_info;
+	struct fbi_info *info = (fbi->vid) ? &ovly_info : &gfx_info;
 	int ret = 0;
 
 	pr_debug("fbi->id %d vid: %d\n", fbi->id, fbi->vid);
 #ifdef VSYNC_DSI_CMD
 	mutex_lock(&fbi->vsync_mutex);
 #endif
+
 	irq_unmask_eof(fbi->id);
 
 	switch (param) {
@@ -1319,70 +1341,287 @@ void wait_for_vsync(struct pxa168fb_info *fbi, unsigned char param)
 	default:
 		break;
 	}
-
 	irq_mask_eof(fbi->id);
 #ifdef VSYNC_DSI_CMD
 	mutex_unlock(&fbi->vsync_mutex);
-	#if 0
-	if (fbi->vsync_detected == 0 && fbi->wait_vsync == 1) 
-	{
-		fbi->vsync_detected = 1;
-		wake_up(&fbi->vsync_detect_wq);
-	}
-	#endif
 #endif
 }
 
+enum VSYNC_JOB_TYPE {
+	VSYNC_DSI_SEND_COMMAND = 1,
+	VSYNC_DSI_READ_COMMAND,
+	VSYNC_DSI_LANE_RESET,
+	END_OF_TYPE
+};
+
+struct VSYNC_JOB {
+	enum VSYNC_JOB_TYPE type;
+	void *data;
+};
+
+static struct VSYNC_JOB *todo_job;
+
+int wait_for_vsync_job(struct pxa168fb_info *fbi, struct VSYNC_JOB *job)
+{
+	int ret = 0;
+	unsigned long flags;
+	unsigned long time;
+ #ifdef VSYNC_DSI_CMD
+	mutex_lock(&fbi->vsync_mutex);
+#endif
+	spin_lock_irqsave(&fbi->job_lock, flags);
+	todo_job = job;
+	spin_unlock_irqrestore(&fbi->job_lock, flags);
+	//printk("%s : +Queing job %d\n", __func__, job ? job->type : -1);
+	irq_unmask_eof(fbi->id);
+	atomic_set(&fbi->w_intr1, 0);
+	time = jiffies;
+	ret = wait_event_interruptible_timeout(gfx_info.fbi[0]->w_intr_wq1,
+		atomic_read(&fbi->w_intr1), HZ/20);
+	time = jiffies - time;
+	if (!ret) {
+			clear_dispd_irq(fbi);
+		printk("%s, timeout!(type:%d, elapsed:%dms)\n",
+				__func__, job->type, jiffies_to_msecs(time));
+		printk("%s, irq_mask =0x%08x, active=%d, dma_on=%d, output_on=%d\n", __func__, vsync_imask(fbi->id),!!(fbi->active), !!(fbi->dma_on), !!(fbi->output_on));
+		;
+	}
+	spin_lock_irqsave(&fbi->job_lock, flags);
+	todo_job = NULL;
+	spin_unlock_irqrestore(&fbi->job_lock, flags);
+	//printk("%s : -Queing job\n", __func__);
+	irq_mask_eof(fbi->id);
+#ifdef VSYNC_DSI_CMD
+	mutex_unlock(&fbi->vsync_mutex);
+#endif
+	return ret;
+}
+
+void reset_lanes(struct pxa168fb_info *fbi)
+{
+	panel_dma_ctrl(0);
+	dsi_lanes_enable(fbi, 0);
+	udelay(5);
+	dsi_lanes_enable(fbi, 1);
+	udelay(5);
+	panel_dma_ctrl(1);
+}
+
+void dsi_lanes_reset(struct pxa168fb_info *fbi)
+{
+	struct VSYNC_JOB job;
+	if (!fbi) return;
+	//printk("Reset DSI lanes\n");
+	mutex_lock(&fbi->cmd_mutex);
+	job.type = VSYNC_DSI_LANE_RESET;
+	job.data = NULL;
+	if (fbi->active) wait_for_vsync_job(fbi, &job);
+	//else printk("fbi->active : %d\n", fbi->active);
+	mutex_unlock(&fbi->cmd_mutex);
+	return;
+}
+void dsi_lanes_check(struct pxa168fb_info *fbi)
+{
+	//struct VSYNC_JOB job;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	struct dsi_regs *dsi;
+	unsigned int irq_status, rx0_status,rx_ctrl1,lcd1_status_0,count=0;
+#if 0 // Force reset testing
+	static int count2 = 20;
+#endif
+	if (!di) {
+		pr_err("%s: no dsi info available\n", __func__);
+		return;
+	}
+	dsi = (struct dsi_regs *)di->regs;
+retry:
+	irq_status = readl(&dsi->irq_status);
+	rx0_status = readl(&dsi->rx0_status);
+	rx_ctrl1 = readl(&dsi->rx_ctrl1);
+	lcd1_status_0 = readl(&dsi->lcd1.status_0);
+#if 0 // Force reset testing
+	count2--;
+	if (count2 < 7)
+	{
+		lcd1_status_0 = 0xE0000000;
+		if (count2 == 0) count2=20;
+	}
+#endif
+	if ((lcd1_status_0 & 0xE0000000)== 0xE0000000) // Check DPHY_STOP_STATE_BYTE, and Ready/Request check
+	{
+					// check it 5 times, normal state, can have stop state.
+					if (count++ < 5)
+					{
+									msleep(5);
+									goto retry;
+					}
+	} else return;
+	if ((lcd1_status_0 & 0xE0000000)== 0xE0000000) // Check DPHY_STOP_STATE_BYTE, and Ready/Request check
+	{
+		//printk("Begin 0x%08x,0x%08x,0x%08x,0x%08x\n",lcd1_status_0,irq_status,rx0_status,rx_ctrl1);
+		dsi_lanes_reset(fbi);
+		//printk("Finish 0x%08x,0x%08x,0x%08x,0x%08x\n",lcd1_status_0,irq_status,rx0_status,rx_ctrl1);
+	}
+	return;
+}
+
+void dsi_lanes_debug(struct pxa168fb_info *fbi)
+{
+
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	struct dsi_regs *dsi;
+	unsigned int irq_status, rx0_status,rx_ctrl1,lcd1_status_0,count=0;
+	if (!di) {
+		pr_err("%s: no dsi info available\n", __func__);
+		return;
+	}
+	dsi = (struct dsi_regs *)di->regs;
+	irq_status = readl(&dsi->irq_status);
+	rx0_status = readl(&dsi->rx0_status);
+	rx_ctrl1 = readl(&dsi->rx_ctrl1);
+	lcd1_status_0 = readl(&dsi->lcd1.status_0);
+	printk("ESD.isr : 0x%08x\n",readl(fbi->reg_base + SPU_IRQ_ISR));
+	printk("ESD.phy 0x%08x,0x%08x,0x%08x,0x%08x\n",lcd1_status_0,irq_status,rx0_status,rx_ctrl1);
+}
+struct VSYNC_DSI_TX_CMD_DATA {
+	struct pxa168fb_info *fbi;
+	struct dsi_cmd_desc *cmds;
+	int count;
+	u8 *buffer;
+	u8 *packet_len;
+};
 void pxa168_dsi_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds[],
 		int count)
 {
 #ifdef VSYNC_DSI_CMD
 	u8 *buffer, *packet_len;
-	buffer = kmalloc(DSI_MAX_DATA_BYTES*count, GFP_KERNEL);
+	int ret = 0;
+	buffer = kzalloc(DSI_MAX_DATA_BYTES*count, GFP_KERNEL);
 	packet_len = kmalloc(count, GFP_KERNEL);
-	
-	if (!buffer)
-	{
+
+	if (!buffer) {
 		printk(KERN_WARNING"Cannot get dsi cmd buffer\n");
-		if (packet_len)
-		{
+		if (packet_len) {
 			kfree(packet_len);
 			packet_len = NULL;
 		}
-	}else
-	{
-		if (!packet_len)
-		{
+	} else {
+		if (!packet_len) {
 			printk(KERN_WARNING"Cannot get dsi cmd buffer\n");
 			kfree(buffer);
 			buffer = NULL;
 		}
 		//printk("Use prepareing method\n");
 	}
-	if (buffer && packet_len)
-	{
+
+	mutex_lock(&fbi->cmd_mutex);
+	if (buffer && packet_len) {
 		int loop;
+		struct VSYNC_JOB job;
+		struct VSYNC_DSI_TX_CMD_DATA txcmd_data;
+
 		dsi_prepare_cmd_array_tx(fbi, cmds, count,buffer, packet_len);
-		mutex_lock(&fbi->cmd_mutex);
-		if (fbi->active) wait_for_vsync(fbi, SYNC_SELF);
-		for(loop = 0; loop < count; loop++)
-			dsi_send_prepared_cmd_tx(fbi, cmds[loop], buffer+DSI_MAX_DATA_BYTES*loop, packet_len[loop]);
-		mutex_unlock(&fbi->cmd_mutex);
+		printk("%s : fbi->active = %d fbi->output_on = %d\n", __func__, fbi->active,fbi->output_on);
+		if (fbi->active && fbi->output_on) {
+			txcmd_data.fbi = fbi;
+			txcmd_data.cmds = cmds;
+			txcmd_data.count = count;
+			txcmd_data.buffer = buffer;
+			txcmd_data.packet_len = packet_len;
+			job.type = VSYNC_DSI_SEND_COMMAND;
+			job.data = &txcmd_data;
+			ret = wait_for_vsync_job(fbi, &job);
+			if (!ret) // request occured during non fb emitting period
+			{
+				printk("%s : timout send directly...\n", __func__);
+				for(loop = 0; loop < count; loop++)
+					dsi_send_prepared_cmd_tx(fbi, cmds[loop], buffer+DSI_MAX_DATA_BYTES*loop, packet_len[loop]);
+			}
+		} else {
+			for(loop = 0; loop < count; loop++)
+				dsi_send_prepared_cmd_tx(fbi, cmds[loop], buffer+DSI_MAX_DATA_BYTES*loop, packet_len[loop]);
+		}
 		kfree(buffer);
 		kfree(packet_len);
-	} else
-	{
-		mutex_lock(&fbi->cmd_mutex);
-		//fbi->vsync_detected = 0;
-		if (fbi->active) wait_for_vsync(fbi, SYNC_SELF);
-		//wait_event_interruptible_timeout(fbi->vsync_detect_wq, fbi->vsync_detected , HZ/2);
+	} else {
+		if (fbi->active) wait_for_vsync_job(fbi, NULL); // dummy call
 		panel_dma_ctrl(0);
 		dsi_cmd_array_tx(fbi, cmds, count);
 		panel_dma_ctrl(1);
-		mutex_unlock(&fbi->cmd_mutex);
 	}
+	mutex_unlock(&fbi->cmd_mutex);
+#else
+	dsi_cmd_array_tx(fbi, cmds, count);
 #endif
 }
+
+void pxa168_dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
+		struct dsi_cmd_desc cmds[], int count)
+{
+#ifdef VSYNC_DSI_CMD
+	u8 *buffer, *packet_len;
+	int ret;
+
+	buffer = kzalloc(DSI_MAX_DATA_BYTES*count, GFP_KERNEL);
+	packet_len = kmalloc(count, GFP_KERNEL);
+
+	if (!buffer) {
+		printk(KERN_WARNING"Cannot get dsi cmd buffer\n");
+		if (packet_len) {
+			kfree(packet_len);
+			packet_len = NULL;
+		}
+	} else {
+		if (!packet_len) {
+			printk(KERN_WARNING"Cannot get dsi cmd buffer\n");
+			kfree(buffer);
+			buffer = NULL;
+		}
+		//printk("Use prepareing method\n");
+	}
+
+	mutex_lock(&fbi->cmd_mutex);
+	if (buffer && packet_len) {
+		int loop;
+		struct VSYNC_JOB job;
+		struct VSYNC_DSI_TX_CMD_DATA txcmd_data;
+		dsi_prepare_cmd_array_tx(fbi, cmds, count,buffer, packet_len);
+		printk("%s : fbi->active = %d fbi->output_on = %d\n", __func__, fbi->active,fbi->output_on);
+		if (fbi->active && fbi->output_on) {
+			txcmd_data.fbi = fbi;
+			txcmd_data.cmds = cmds;
+			txcmd_data.count = count;
+			txcmd_data.buffer = buffer;
+			txcmd_data.packet_len = packet_len;
+			job.type = VSYNC_DSI_SEND_COMMAND;
+			job.data = &txcmd_data;
+			ret=wait_for_vsync_job(fbi, &job);
+			if (!ret) // request occured during non fb emitting period
+			{
+				for(loop = 0; loop < count; loop++)
+					dsi_send_prepared_cmd_tx(fbi, cmds[loop], buffer+DSI_MAX_DATA_BYTES*loop, packet_len[loop]);
+			}
+		} else {
+			for(loop = 0; loop < count; loop++)
+				dsi_send_prepared_cmd_tx(fbi, cmds[loop], buffer+DSI_MAX_DATA_BYTES*loop, packet_len[loop]);
+		}
+		kfree(buffer);
+		kfree(packet_len);
+	} else {
+		if (fbi->active) wait_for_vsync_job(fbi, NULL); // dummy call
+		panel_dma_ctrl(0);
+		dsi_cmd_array_tx(fbi, cmds, count);
+		panel_dma_ctrl(1);
+	}
+	dsi_cmd_array_rx_process(fbi, dbuf);
+	mutex_unlock(&fbi->cmd_mutex);
+#else
+	dsi_cmd_array_rx(fbi,dbuf,cmds,count);
+#endif
+}
+
 void pxa168fb_list_init(struct pxa168fb_info *fbi)
 {
 	INIT_LIST_HEAD(&fbi->buf_freelist.dma_queue);
@@ -1460,6 +1699,7 @@ void set_dma_control0(struct pxa168fb_info *fbi, struct regshadow *shadowreg)
 
 	mi = fbi->dev->platform_data;
 	pix_fmt = fbi->pix_fmt;
+	shadowreg->yuv420sp_ctrl = 0;
 
 	/* If we are in a pseudo-color mode, we need to enable
 	 * palette lookup  */
@@ -1487,13 +1727,17 @@ void set_dma_control0(struct pxa168fb_info *fbi, struct regshadow *shadowreg)
 			/* YVU422PACK */
 			x |= dma_swapuv(fbi->vid, pix_fmt & 1);
 	} else if (pix_fmt >= 12) {
-		/* PIX_FMT_YUV422PACK_IRE_90_270 is here */
+		/* PLANAR, SEMIPLANAR, YUV422PACK_IRE_90_270, PSEUDOCOLOR */
 		if (!fbi->vid)
 			pr_err("%s fmt %d not supported on graphics layer...\n",
 				__func__, pix_fmt);
-		/* PLANAR, YUV422PACK_IRE_90_270, PSEUDOCOLOR */
 		x |= dma_csc(fbi->vid, 1);
-		x |= dma_swapuv(fbi->vid, pix_fmt & 1);
+		if (pix_fmt == PIX_FMT_YUV420SEMIPLANAR ||
+			pix_fmt == PIX_FMT_YVU420SEMIPLANAR)
+			/* YUV420SP format owns independent UV swap ctrl */
+			shadowreg->yuv420sp_ctrl = swap_spuv(fbi->id);
+		else
+			x |= dma_swapuv(fbi->vid, pix_fmt & 1);
 		x |= dma_swaprb(fbi->vid, (mi->panel_rbswap));
 	} else {
 		/* RGB formats */
@@ -1629,6 +1873,9 @@ void pxa168fb_set_regs(struct pxa168fb_info *fbi, struct regshadow *shadowreg)
 	if (shadowreg->flags & UPDATE_MODE) {
 		dma_ctrl_set(fbi->id, 0, dma_mask(fbi->vid),
 				 shadowreg->dma_ctrl0);
+		if (fbi->vid)
+			yuvsp_fmt_ctrl(yuvsp_mask(fbi->id),
+				shadowreg->yuv420sp_ctrl);
 		shadowreg->flags &= ~UPDATE_MODE;
 	}
 
@@ -1668,9 +1915,9 @@ irqreturn_t pxa168_fb_isr(int id)
 {
 	struct pxa168fb_info *fbi;
 	struct regshadow *shadowreg;
-	struct pxa168fb_mach_info *mi;
 	int vid;
 	struct timespec vsync_time;
+	unsigned long flags;
 
 	/* First do video layer update, then graphics layer */
 	for (vid = 1; vid >= 0; vid--) {
@@ -1678,7 +1925,6 @@ irqreturn_t pxa168_fb_isr(int id)
 		if (!fbi)
 			continue;
 
-		mi = fbi->dev->platform_data;
 		shadowreg = &fbi->shadowreg;
 		if (shadowreg && shadowreg->flags)
 			pxa168fb_set_regs(fbi, shadowreg);
@@ -1693,21 +1939,51 @@ irqreturn_t pxa168_fb_isr(int id)
 		/* wake up queue, only use one queue for all layer */
 		if (atomic_read(&fbi->w_intr) == 0) {
 			atomic_set(&fbi->w_intr, 1);
-			wake_up(&gfx_info.fbi[0]->w_intr_wq);
+			wake_up_all(&gfx_info.fbi[0]->w_intr_wq);
 		}
 
-		if(mi->mmap < 3)
-			atomic_set(&fbi->vsync_cnt, 1);
-		else
+		/* wake up queue, for some operations which must be done
+		 * after vsync happen, so it should be done by sequence */
+		if (atomic_read(&fbi->w_intr1) == 0) {
+			atomic_set(&fbi->w_intr1, 1);
+			spin_lock_irqsave(&fbi->job_lock, flags);
+			if (todo_job) {
+				switch(todo_job->type) {
+					case VSYNC_DSI_SEND_COMMAND :
+						{
+							int loop;
+							struct VSYNC_DSI_TX_CMD_DATA *txcmd_data = (struct VSYNC_DSI_TX_CMD_DATA *)todo_job->data;
+							for(loop = 0; loop < txcmd_data->count; loop++) {
+									dsi_send_prepared_cmd_tx(txcmd_data->fbi,
+											txcmd_data->cmds[loop],
+											txcmd_data->buffer+DSI_MAX_DATA_BYTES*loop,
+											txcmd_data->packet_len[loop]);
+							}
+						}
+						break;
+					case VSYNC_DSI_READ_COMMAND :
+						break;
+					case VSYNC_DSI_LANE_RESET :
+						reset_lanes(fbi);
+						break;
+					default :
+						break;
+				}
+				todo_job = NULL;
+			}
+			spin_unlock_irqrestore(&fbi->job_lock, flags);
+			wake_up(&gfx_info.fbi[0]->w_intr_wq1);
+		}
 		atomic_set(&fbi->vsync_cnt, 2);
 
 		if (fbi->vsync_en) {
 			/* Get time stamp of vsync */
 			ktime_get_ts(&vsync_time);
 			fbi->vsync_ts_nano = ((uint64_t)vsync_time.tv_sec)
-				* 1000 * 1000 * 1000 + ((uint64_t)vsync_time.tv_nsec);
+				* 1000 * 1000 * 1000 +
+				((uint64_t)vsync_time.tv_nsec);
 			/* notify sysfs in work queue */
-			schedule_work(&fbi->vsync_work);
+			queue_work(fbi->workqueue, &fbi->vsync_work);
 		}
 	}
 	return IRQ_HANDLED;
@@ -1888,8 +2164,16 @@ static ssize_t lcd_show(struct device *dev, struct device_attribute *attr,
 	mvdisp_dump(f, "path %d:\n\tactive %d, dma_on %d\n",
 		fbi->id, fbi->active, fbi->dma_on);
 	if (!fbi->vid)
-		mvdisp_dump(f, "\tpath frm time %luus, clk_src %luMHz\n",
-			fbi->frm_usec, clk_get_rate(fbi->clk)/1000000);
+		mvdisp_dump(f, "\tpath frm time %luus\n", fbi->frm_usec);
+	if (fbi->clk)
+		mvdisp_dump(f, "\tclk_src %luMhz\n",
+			clk_get_rate(fbi->clk)/1000000);
+	if (fbi->path_clk)
+		mvdisp_dump(f, "\tpath_clk_src %luMhz\n",
+			clk_get_rate(fbi->path_clk)/1000000);
+	if (fbi->phy_clk)
+		mvdisp_dump(f, "\tphy_clk_src %luMhz\n",
+			clk_get_rate(fbi->phy_clk)/1000000);
 	mvdisp_dump(f, "\tgfx_udflow %d, vid_udflow %d, axi_err %d\n",
 		gfx_udflow_count, vid_udflow_count, axi_err_count);
 	mvdisp_dump(f, "\tirq_retry_count %d\n", irq_retry_count);
@@ -1947,12 +2231,12 @@ static ssize_t lcd_store(
 		memcpy(vol, buf+1, size-1);
 		lcdclk = clk_get(NULL, "LCDCLK");
 		if ((int) simple_strtoul(vol, NULL, 16) != 0)
-		{			
+		{
 			printk("enable lcdclk\n");
 			lcdclk->ops->enable(lcdclk);
 		}
 		else
-		{			
+		{
 			printk("disable lcdclk\n");
 			lcdclk->ops->disable(lcdclk);
 		}
@@ -2012,3 +2296,356 @@ static ssize_t lcd_store(
 }
 
 DEVICE_ATTR(lcd, S_IRUGO | S_IWUSR, lcd_show, lcd_store);
+
+#ifdef CONFIG_DISP_DFC
+atomic_t disp_dfc = ATOMIC_INIT(0);
+atomic_t disp_pll3 = ATOMIC_INIT(0);
+atomic_t disp_pll1 = ATOMIC_INIT(0);
+#define ROUND_RATE_RANGE_MHZ 	2  /* unit: MHz */
+#define DFC_RETRY_TIMEOUT 	60
+#define MHZ_TO_HZ 		1000000
+
+enum {
+	PLL1_416 = 0,
+	PLL1_624,
+	PLL3,
+};
+
+static void recalculate_disp_clk(struct pxa168fb_info *fbi,
+				 u32 divider, u32 *reg_val)
+{
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	u32  bclk_div, pclk_div, ratio;
+
+	ratio = ((di->lanes > 2) ? 4 : 8);
+	*reg_val = lcd_clk_get(fbi->id, clk_sclk);
+	*reg_val &= ~(SCLK_SOURCE_SELECT_MASK |
+		 DSI1_BITCLK_DIV_MASK |
+		 CLK_INT_DIV_MASK);
+	bclk_div = divider;
+	pclk_div = divider * ratio;
+	*reg_val |= DSI1_BITCLK_DIV(bclk_div) | CLK_INT_DIV(pclk_div);
+}
+
+/*
+ * trigger display dynamic frequency change, retry DFC_RETRY_TIMEOUT times,
+ * if still failed, then give up this dfc.
+ */
+static int disp_dfc_commit(struct pxa168fb_info *fbi, struct clk *best_parent,
+			   int *timeout)
+{
+	int ret = 0, count = 0;
+	unsigned long flags;
+
+	atomic_set(&disp_dfc, 1);
+	do {
+		wait_for_vsync(fbi, SYNC_SELF);
+		count++;
+	} while (atomic_read(&disp_dfc) && (count < DFC_RETRY_TIMEOUT));
+
+	spin_lock_irqsave(&fbi->dfc_lock, flags);
+	if (unlikely(count == DFC_RETRY_TIMEOUT) && atomic_read(&disp_dfc)) {
+		ret = -EINVAL;
+		atomic_set(&disp_dfc, 0);
+	}
+	spin_unlock_irqrestore(&fbi->dfc_lock, flags);
+
+	if (!ret) {
+		clk_reparent(fbi->phy_clk->parent->parent, best_parent);
+		clk_reparent(fbi->path_clk->parent->parent, best_parent);
+	}
+
+	*timeout = count;
+	return ret;
+}
+
+static int disp_sclk_switch_to_pll1(struct pxa168fb_info *fbi, u32 pll1,
+				    u32 divider, int *timeout)
+{
+	int ret = 0;
+	unsigned int reg_val = 0;
+	struct clk *best_parent = NULL, *pll3_clk = NULL;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+
+	mi->sclk_rst = __raw_readl((void __iomem *)APMU_LCD);
+	mi->sclk_rst &= ~(1 << 9);
+	switch (pll1) {
+	case PLL1_624:
+		best_parent = clk_get(NULL, "pll1_624");
+		mi->sclk_rst &= ~(1 << 6);
+		break;
+	case PLL1_416:
+	default:
+		best_parent = clk_get(NULL, "pll1_416");
+		mi->sclk_rst |= 1 << 6;
+		break;
+	}
+
+	recalculate_disp_clk(fbi, divider, &reg_val);
+	mi->sclk_div = reg_val | SCLK_SOURCE_SELECT(1);
+
+	/* trigger display frequency change*/
+	atomic_set(&disp_pll1, 1);
+	ret = disp_dfc_commit(fbi, best_parent, timeout);
+	if (!ret) {
+		atomic_set(&disp_pll1, 0);
+		if(atomic_read(&disp_pll3)) {
+			atomic_set(&disp_pll3, 0);
+			pll3_clk = clk_get(NULL, "pll3");
+			clk_disable(pll3_clk);
+			/* restore pll3 to default rate */
+			dynamic_change_pll3(0);
+		}
+		pr_info("%s: %s, divider %u\n", __func__,
+			pll1 ? "624":"416", divider);
+	}
+	return ret;
+}
+
+static int disp_sclk_pll3_to_pll1(struct pxa168fb_info *fbi, u32 rate,
+				  int *timeout)
+{
+	unsigned long parent_rate, now,bestl = 0, besth = ULONG_MAX;
+	unsigned int bestdivl = 0, bestdivh = 0, div = 0;
+	unsigned int parent_selh = 0, parent_sell = 0, parent_sel = 0;
+	unsigned int i, j, maxdiv = 15;
+	u32 pll1_op_table[2] = {416, 624};
+	int ret = 0;
+
+	for (i = 0; i < 2; i++) {
+		parent_rate = pll1_op_table[i];
+		for (j = 1; j <= maxdiv; j++) {
+			now = parent_rate / j;
+			/* condition to select a best closest rate >= rate */
+			if (now >= rate && now < besth) {
+				bestdivh = j;
+				besth = now;
+				parent_selh = i;
+			/* condition to select a best closest rate <= rate */
+			} else if (now <= rate && now > bestl) {
+				bestdivl = j;
+				bestl = now;
+				parent_sell = i;
+			}
+		}
+	}
+
+	now = ((besth - rate) <= (rate - bestl)) ? besth : bestl;
+	if (now == besth) {
+		div = bestdivh;
+		parent_sel = parent_selh;
+	} else {
+		div = bestdivl;
+		parent_sel = parent_sell;
+	}
+
+	if (!div)
+		div = 1;
+
+	ret = disp_sclk_switch_to_pll1(fbi, parent_sel, div, timeout);
+
+	return ret;
+}
+
+static bool is_pll3_used_by_disp(int id)
+{
+	u32 reg_val;
+
+	reg_val = lcd_clk_get(id, clk_sclk);
+	/* if pll3 was currently used by disp, first change to pll1 */
+	if ((reg_val & SCLK_SOURCE_SELECT_MASK) == SCLK_SOURCE_DSI_PLL)
+		return true;
+	else
+		return false;
+}
+
+static int mmp_disp_dfc(struct pxa168fb_info *fbi, u32 rate)
+{
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct clk *pll3_clk = NULL, *best_parent = NULL;
+	u32 tmp, div, real_rate, i, j, reg_val;
+	u32 op_table[3] = {416, 624, 0};
+	static u32 old_rate = 1;
+	int ret = 0, count = 0;
+	bool pll3_to_pll3 = false;
+
+	if (!mi->no_legacy_clk) {
+		pr_err("legacy clock dfc not implemented now!\n");
+		return -EINVAL;
+	}
+	mutex_lock(&fbi->access_ok);
+	if (!fbi->active) {
+		pr_info("LCD enter suspend, don't do disp dfc\n");
+		mutex_unlock(&fbi->access_ok);
+		return -EINVAL;
+	}
+
+	if ((rate >= (old_rate - ROUND_RATE_RANGE_MHZ) &&
+	     rate <= (old_rate + ROUND_RATE_RANGE_MHZ)) || !rate) {
+		pr_err("new rate is %uMHz or around the old rate %uMHz\n",
+			rate, old_rate);
+		mutex_unlock(&fbi->access_ok);
+		return -EINVAL;
+	}
+
+	/*
+	 * We are trying to restore disp freq to default, if current clk
+	 * src is pll1, first restore pll3 to default freq then do disp dfc.
+	 * If current clk src is pll3, pll3 will be restored after dfc.
+	 */
+	if ((rate == mi->sclk_default) && !atomic_read(&disp_pll3))
+		dynamic_change_pll3(0);
+
+	best_parent = pll3_clk = clk_get(NULL, "pll3");
+	/* pll3 frequency */
+	op_table[2] = clk_get_rate(best_parent) / MHZ_TO_HZ;
+
+	tmp = 0xff;
+	for (i = 0; i < ARRAY_SIZE(op_table); i++) {
+		for (j = 1; j < 15; j++) {
+			real_rate = op_table[i] / j;
+			if (rate > real_rate + ROUND_RATE_RANGE_MHZ)
+				break;
+			else if ((rate <= (real_rate + ROUND_RATE_RANGE_MHZ)) &&
+				 (rate >= (real_rate - ROUND_RATE_RANGE_MHZ))) {
+				/* round clock rate in 1MHz range */
+				tmp = real_rate;
+				break;
+			}
+		}
+
+		if (tmp != 0xff)
+			break;
+	}
+#if 0
+	/* can't find a suitable clock source */
+	if (tmp == 0xff)
+		i = 0xff;
+#endif
+
+	switch (i) {
+	case PLL1_416:
+	case PLL1_624:
+		ret = disp_sclk_switch_to_pll1(fbi, i, j, &count);
+		break;
+	case PLL3:
+		if(is_pll3_used_by_disp(fbi->id))
+			pll3_to_pll3 = true;
+		else
+			pll3_to_pll3= false;
+
+		recalculate_disp_clk(fbi, j, &reg_val);
+		mi->sclk_div = reg_val | SCLK_SOURCE_SELECT(3);
+		clk_enable(pll3_clk);
+		atomic_set(&disp_pll3, 1);
+
+		ret = disp_dfc_commit(fbi, best_parent, &count);
+		if (ret) {
+			/* if disp dfc failed, disable pll3 */
+			clk_disable(pll3_clk);
+			/* previous sclk is pll1, restore pll3 to default rate */
+			if (!pll3_to_pll3) {
+				atomic_set(&disp_pll3, 0);
+				dynamic_change_pll3(0);
+			}
+		} else if (atomic_read(&disp_pll1))
+			atomic_set(&disp_pll1, 0);
+		break;
+	default:
+		/* need to dynamic change pll3, firt ensure no one use pll3 */
+		reg_val = lcd_clk_get(fbi->id, clk_sclk);
+		/* if pll3 was currently used by disp, first change to pll1 */
+		if ((reg_val & SCLK_SOURCE_SELECT_MASK) ==
+		    SCLK_SOURCE_DSI_PLL) {
+			div = (reg_val & DSI1_BITCLK_DIV_MASK) >> 8;
+			old_rate = clk_get_rate(pll3_clk) / div / MHZ_TO_HZ;
+			ret = disp_sclk_pll3_to_pll1(fbi, old_rate, &count);
+		}
+		if (ret)
+			goto out;
+
+		/* then re-configure the pll3 clock */
+		dynamic_change_pll3(rate);
+		clk_enable(pll3_clk);
+		/* round off the divider */
+		div = (clk_get_rate(pll3_clk) / MHZ_TO_HZ+ rate / 2) / rate;
+		recalculate_disp_clk(fbi, div, &reg_val);
+		mi->sclk_div = reg_val | SCLK_SOURCE_SELECT(3);
+		atomic_set(&disp_pll3, 1);
+		/* switch disp sclk from pll1 to pll3 */
+		ret = disp_dfc_commit(fbi, best_parent, &count);
+		if (ret) {
+			/* if disp dfc failed, disable pll3 */
+			atomic_set(&disp_pll3, 0);
+			clk_disable(pll3_clk);
+			/* restore pll3 to default rate */
+			dynamic_change_pll3(0);
+		} else if (atomic_read(&disp_pll1))
+			atomic_set(&disp_pll1, 0);
+
+		real_rate = clk_get_rate(pll3_clk) / div / MHZ_TO_HZ;
+		break;
+	}
+out:
+	if (!ret) {
+		old_rate = real_rate;
+
+		pr_info("disp_dfc was done in %d vblank time, new rate %uMHz,"
+			 " clk_src pll%d %luMHz, sclk div 0x%x, rst 0x%x\n",
+			 count, real_rate, (u32)(atomic_read(&disp_pll3) ? 3 : 1),
+			 clk_get_rate(best_parent) / MHZ_TO_HZ,
+			 mi->sclk_div, mi->sclk_rst);
+	} else {
+		pr_err("disp dfc from %dMHz to %dMHz failed for %d times\n",
+			old_rate, rate, DFC_RETRY_TIMEOUT);
+	}
+
+	mutex_unlock(&fbi->access_ok);
+	return ret;
+}
+
+static ssize_t lcd_freq_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct pxa168fb_info *fbi = dev_get_drvdata(dev);
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	u32 pixel_clk, phy_clk;
+	int s = 0;
+
+	mutex_lock(&fbi->access_ok);
+	if (mi->no_legacy_clk) {
+		if (mi->phy_type & (DSI | DSI2DPI | LVDS)) {
+			phy_clk = clk_get_rate(fbi->phy_clk);
+			pixel_clk = phy_clk * di->lanes / di->bpp;
+			s += sprintf(buf, "real path clock %uMhz,"
+				" phy clock %uMhz, pixclock %uMhz\n",
+				(u32) (clk_get_rate(fbi->path_clk) / MHZ_TO_HZ),
+				(phy_clk / MHZ_TO_HZ), pixel_clk / MHZ_TO_HZ);
+		} else {
+			pixel_clk = clk_get_rate(fbi->path_clk);
+			s += sprintf(buf, "real path clock %uMhz\n",
+				 pixel_clk / MHZ_TO_HZ);
+		}
+	} else
+		s += sprintf(buf, "legacy:real path clock %uMhz\n",
+			(u32) clk_get_rate(fbi->clk) / MHZ_TO_HZ);
+	mutex_unlock(&fbi->access_ok);
+	return s;
+}
+static ssize_t lcd_freq_store(
+		struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct pxa168fb_info *fbi = dev_get_drvdata(dev);
+	u32 rate;
+
+	rate = (int)simple_strtoul(buf, NULL, 10);
+	mmp_disp_dfc(fbi, rate);
+	return size;
+}
+
+DEVICE_ATTR(freq, S_IRUGO | S_IWUSR, lcd_freq_show, lcd_freq_store);
+
+#endif

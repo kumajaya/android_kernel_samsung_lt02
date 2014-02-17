@@ -280,12 +280,10 @@ static void debug_identify_called_ioctl(struct fb_info *fi, int cmd,
 		dev_dbg(fi->dev, "FB_IOCTL_FLIP_VID_BUFFER with arg =\
 			 %08x\n", (unsigned int)arg);
 		break;
-
 	case FB_IOCTL_FLIP_VSYNC:
 		dev_dbg(fi->dev, "FB_IOCTL_FLIP_VSYNC with arg =\
 			 %08x\n", (unsigned int)arg);
 		break;
-
 	case FB_IOCTL_GET_FREELIST:
 		dev_dbg(fi->dev, "FB_IOCTL_GET_FREELIST with arg =\
 			 %08x\n", (unsigned int)arg);
@@ -473,7 +471,6 @@ static int pxa168fb_ovly_ioctl(struct fb_info *fi, unsigned int cmd,
 		return flip_buffer(fi, arg);
 	case FB_IOCTL_GET_FREELIST:
 		return get_freelist(fi, arg);
-		
 	case FB_IOCTL_FLIP_VSYNC:
 		return flip_buffer_vsync(fi, arg);
 	case FB_IOCTL_GET_BUFF_ADDR:
@@ -734,7 +731,7 @@ static void set_mode(struct pxa168fb_info *fbi, struct fb_var_screeninfo *var,
 	var->yres = mode->yres;
 	var->xres_virtual = max(var->xres, var->xres_virtual);
 	if (ystretch)
-		var->yres_virtual = var->yres*2;
+		var->yres_virtual = var->yres * ((ystretch > 1) ? ystretch : 2);
 	else
 		var->yres_virtual = max(var->yres, var->yres_virtual);
 
@@ -757,6 +754,7 @@ static int pxa168fb_set_par(struct fb_info *fi)
 	struct pxa168fb_info *fbi = fi->par;
 	struct fb_var_screeninfo *var = &fi->var;
 	struct regshadow *shadowreg = &fbi->shadowreg;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 	int pix_fmt;
 	u32 flags;
 
@@ -773,7 +771,8 @@ static int pxa168fb_set_par(struct fb_info *fi)
 	if (!var->xres_virtual)
 		var->xres_virtual = var->xres;
 	if (!var->yres_virtual)
-		var->yres_virtual = var->yres * 2;
+		var->yres_virtual = var->yres *
+			((mi->mmap > 1) ? mi->mmap : 2);
 	var->grayscale = 0;
 	var->accel_flags = FB_ACCEL_NONE;
 	var->rotate = FB_ROTATE_UR;
@@ -1018,7 +1017,7 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	/*
 	 * Fill in sane defaults.
 	 */
-	set_mode(fbi, &fi->var, mi->modes, mi->pix_fmt, 1);
+	set_mode(fbi, &fi->var, mi->modes, mi->pix_fmt, mi->mmap);
 	pxa168fb_set_par(fi);
 
 	pxa168fb_list_init(fbi);

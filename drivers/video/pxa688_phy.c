@@ -23,8 +23,8 @@ static struct dsi_phy phy = {
 	.hs_prep_ui		= 4,
 	.hs_zero_constant	= 145,
 	.hs_zero_ui		= 10,
-	.hs_trail_constant	= 0,
-	.hs_trail_ui		= 64,
+	.hs_trail_constant	= 60,
+	.hs_trail_ui		= 4,
 	.hs_exit_constant	= 100,
 	.hs_exit_ui		= 0,
 	.ck_zero_constant	= 300,
@@ -41,7 +41,9 @@ static struct dsi_phy phy = {
 #define dsi_ex_pixel_cnt		0
 #define dsi_hex_en			0
 /* (Unit: Mhz) */
-#define dsi_hsclk			(clk_get_rate(fbi->clk)/1000000)
+#define dsi_hsclk			(fbi->clk ? \
+					clk_get_rate(fbi->clk)/1000000 :\
+					clk_get_rate(fbi->phy_clk)/1000000)
 #define dsi_lpclk			3
 
 #define to_dsi_bcnt(timing, bpp)	(((timing) * (bpp)) >> 3)
@@ -217,7 +219,7 @@ static void dsi_send_cmds(struct pxa168fb_info *fbi, u8 *parameter,
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
 	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
-	u32 send_data = 0, waddr, i, loop;
+	u32 send_data = 0, waddr, i, loop, turnaround;
 
 	/* write all packet bytes to packet data buffer */
 	for (i = 0; i < count; i++) {
@@ -228,10 +230,9 @@ static void dsi_send_cmds(struct pxa168fb_info *fbi, u8 *parameter,
 				DSI_CFG_CPU_DAT_RW_MASK |
 				((i - 3) << DSI_CFG_CPU_DAT_ADDR_SHIFT);
 			writel(waddr, &dsi->cmd3);
-			loop = 1000;
+			loop = 100000;
 			/* wait write operation done */
 			while (readl(&dsi->cmd3) & DSI_CFG_CPU_DAT_REQ_MASK) {
-				//msleep(1);
 				loop--;
 				if (loop <= 0){
 				   pr_err("%s error!\n", __func__);
@@ -249,10 +250,9 @@ static void dsi_send_cmds(struct pxa168fb_info *fbi, u8 *parameter,
 			DSI_CFG_CPU_DAT_RW_MASK |
 			((4 * (i / 4)) << DSI_CFG_CPU_DAT_ADDR_SHIFT);
 		writel(waddr, &dsi->cmd3);
-		loop = 1000;
+		loop = 100000;
 		/* wait write operation done */
 		while (readl(&dsi->cmd3) & DSI_CFG_CPU_DAT_REQ_MASK) {
-			//msleep(1);
 			loop--;
 			if (loop <= 0) {
 				pr_err("%s error!\n", __func__);
@@ -263,43 +263,20 @@ static void dsi_send_cmds(struct pxa168fb_info *fbi, u8 *parameter,
 		send_data = 0;
 	}
 
-	/* send out the packet */
-	if (count == 4)
-		waddr = DSI_CFG_CPU_SP_MASK;
-	else {
-		#if 0
-		/*
-		 * To be double confirmed:
-		 * re-send the packet header for long packet????
-		 */
-		for (i = 0; i < 4; i++) {
-			send_data |= parameter[i] << ((i % 4) * 8);
-			if (!((i + 1) % 4)) {
-				writel(send_data, &dsi->dat0);
-				waddr = DSI_CFG_CPU_DAT_REQ_MASK |
-					DSI_CFG_CPU_DAT_RW_MASK |
-					((i - 3) << DSI_CFG_CPU_DAT_ADDR_SHIFT);
-				writel(waddr, &dsi->cmd3);
-				/* wait write operation done */
-				while (readl(&dsi->cmd3) &
-						DSI_CFG_CPU_DAT_REQ_MASK)
-					msleep(1);
-				send_data = 0;
-			}
-		}
-		#endif
-		waddr = 0;
-	}
-	waddr |= DSI_CFG_CPU_CMD_REQ_MASK |
-		#if !defined(CONFIG_MACH_LT02) && !defined(CONFIG_MACH_COCOA7)
-		DSI_CFG_CPU_TURN_MASK |
-		#endif
+	if (parameter[0] == DSI_DI_DCS_READ|| parameter[0] == DSI_DI_SET_MAX_PKT_SIZE)
+		turnaround = 0x1;
+	else
+		turnaround = 0x0;
+
+	waddr = DSI_CFG_CPU_CMD_REQ_MASK |
+		((count == 4) ? DSI_CFG_CPU_SP_MASK : 0) |
+		(turnaround << DSI_CFG_CPU_TURN_SHIFT) |
 		(lp ? DSI_CFG_CPU_TXLP_MASK : 0) |
-		(count << DSI_CFG_CPU_WC_SHIFT);
+		((lp ? count : count -2) << DSI_CFG_CPU_WC_SHIFT);
 
 	/* send out the packet */
 	writel(waddr, &dsi->cmd0);
-	loop = 10000;
+	loop = 100000;
 	/* wait packet be sent out */
 	while (readl(&dsi->cmd0) & DSI_CFG_CPU_CMD_REQ_MASK) {
 		//msleep(1);
@@ -332,7 +309,8 @@ void dsi_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds[],
 			memcpy(&parameter[1], cmd_line.data, len);
 			len = 4;
 			break;
-		case  DSI_DI_DCS_LWRITE:
+		case DSI_DI_GENERIC_LWRITE:
+		case DSI_DI_DCS_LWRITE:
 			parameter[1] = len & 0xff;
 			parameter[2] = 0;
 			memcpy(&parameter[4], cmd_line.data, len);
@@ -341,16 +319,6 @@ void dsi_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmds[],
 			parameter[len + 5] = (crc >> 8) & 0xff;
 			len += 6;
 			break;
-		case  DSI_DI_DCS_GEN_LWRITE:
-			parameter[1] = len & 0xff;
-			parameter[2] = 0;
-			memcpy(&parameter[4], cmd_line.data, len);
-			crc = calculate_crc16(&parameter[4], len);
-			parameter[len + 4] = crc & 0xff;
-			parameter[len + 5] = (crc >> 8) & 0xff;
-			len += 6;
-			break;
-			
 		default:
 			pr_err("%s: data type not supported 0x%x\n",
 					__func__, command);
@@ -400,6 +368,7 @@ void dsi_prepare_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmd
 			memcpy(&parameter[1], cmd_line.data, len);
 			len = 4;
 			break;
+		case  DSI_DI_GENERIC_LWRITE:
 		case  DSI_DI_DCS_LWRITE:
 			parameter[1] = len & 0xff;
 			parameter[2] = 0;
@@ -414,7 +383,7 @@ void dsi_prepare_cmd_array_tx(struct pxa168fb_info *fbi, struct dsi_cmd_desc cmd
 					__func__, command);
 			break;
 		}
-		parameter[3] = calculate_ecc(buffer);
+		parameter[3] = calculate_ecc(parameter);
 		packet_len[loop] = len;
 	}
 }
@@ -473,6 +442,54 @@ void dsi_lanes_enable(struct pxa168fb_info *fbi, int en)
 	writel(reg, &dsi->phy_ctrl2);
 }
 
+void dsi_ulps_tx_enable(struct pxa168fb_info *fbi, int en)
+{
+       struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+       struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+       struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+       u32 reg = readl(&dsi->cmd1);      
+
+	   if(en)
+	   	reg |= (0xf<< 16);
+	   else
+		reg &= ~(0xf<< 16);
+			
+
+       pr_debug("%s %d: phy_cmd1 0x%x\n", __func__, en, reg);
+       writel(reg, &dsi->cmd1);
+}
+void dsi_dphy_force_ulps_mode(struct pxa168fb_info *fbi)
+{
+       struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+       struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+       struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+	   
+       u32 reg = readl(&dsi->cmd1) | (0xf<< 16);  
+
+       pr_debug("%s: phy_cmd1 0x%x\n", __func__, reg);
+       writel(reg, &dsi->cmd1);
+
+	   reg =  readl(&dsi->phy_ctrl1) | (1<<1) | (1<<2); 
+	    writel(reg, &dsi->phy_ctrl1);	   
+}
+
+
+
+void dsi_dphy_exit_ulps_mode(struct pxa168fb_info *fbi)
+{
+       struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+       struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+       struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+	   
+       u32 reg = readl(&dsi->cmd1)  &  ~(0xf<< 16);  
+
+       pr_debug("%s: phy_cmd1 0x%x\n", __func__, reg);
+       writel(reg, &dsi->cmd1);
+
+	   reg =  readl(&dsi->phy_ctrl1) & ~((1<<1) | (1<<2)); 
+	    writel(reg, &dsi->phy_ctrl1);	   
+}
+
 void dsi_set_dphy(struct pxa168fb_info *fbi)
 {
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
@@ -522,6 +539,7 @@ void dsi_set_dphy(struct pxa168fb_info *fbi)
 
 	hs_trail = phy.hs_trail_constant + phy.hs_trail_ui * ui;
 	hs_trail = hs_trail / DSI_ESC_CLK_T + 1;
+	hs_trail -= 3;
 	pr_debug("hs_trail:%d, condition (HS_TRAIL:%d > MIN1:%d / MIN2:%d "
 		"/ MIN3:%d)\n", hs_trail, (hs_trail + 1) * DSI_ESC_CLK_T,
 		8 * ui, 60 + 4 * ui, 64 * ui);
@@ -582,6 +600,22 @@ void dsi_set_dphy(struct pxa168fb_info *fbi)
 	 */
 }
 
+
+void dsi_reset_dsi_module(struct pxa168fb_info *fbi)
+{
+
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+	volatile unsigned int reg;
+
+	
+
+	writel(0x80000000, &dsi->ctrl0);
+	mdelay(1);
+	writel(0, &dsi->ctrl0);
+
+}
 void dsi_reset(struct pxa168fb_info *fbi, int hold)
 {
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
@@ -621,7 +655,7 @@ void dsi_set_controller(struct pxa168fb_info *fbi)
 
 	h_total = var->xres + var->left_margin +
 		 var->right_margin + var->hsync_len;
-	v_total = var->yres + var->upper_margin +
+	v_total = var->yres + mi->last_dummy_lines + var->upper_margin +
 		 var->lower_margin + var->vsync_len;
 
 	hact_b = to_dsi_bcnt(var->xres, bpp);
@@ -680,7 +714,7 @@ void dsi_set_controller(struct pxa168fb_info *fbi)
 	 * done below). In a later stepping of the processor this workaround
 	 * will not be required.
 	 */
-	writel(((var->yres)<<16) | (v_total), &dsi_lcd->timing2);
+	writel(((var->yres + mi->last_dummy_lines)<<16) | (v_total), &dsi_lcd->timing2);
 
 	writel(((var->vsync_len) << 16) | (var->upper_margin),
 		 &dsi_lcd->timing3);
@@ -740,7 +774,7 @@ void dsi_set_controller(struct pxa168fb_info *fbi)
 		reg = reg << 1;
 	writel(reg, &dsi->ctrl0);
 
-	writel(((var->yres)<<16) | (v_total), &dsi_lcd->timing2);
+	writel(((var->yres + mi->last_dummy_lines)<<16) | (v_total), &dsi_lcd->timing2);
 }
 
 void dsi_set_panel_interface(struct pxa168fb_info *fbi, bool on)
@@ -749,7 +783,6 @@ void dsi_set_panel_interface(struct pxa168fb_info *fbi, bool on)
 	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
 	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
 	int reg;
-
 	printk("zlp get dphy_ctrl2=%x\n",readl(&dsi->phy_ctrl2));
 	reg = readl(&dsi->ctrl0);
 	if (on)
@@ -758,7 +791,20 @@ void dsi_set_panel_interface(struct pxa168fb_info *fbi, bool on)
 		reg &= ~(DSI_CTRL_0_CFG_LCD1_EN << ((di->id & 2) ? 1 : 0));
 	writel(reg, &dsi->ctrl0);
 }
+void dsi_set_panel_intf(struct pxa168fb_info *fbi, bool on)
+{
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+	int reg;
 
+	reg = readl(&dsi->ctrl0);
+	if (on)
+		reg |= DSI_CTRL_0_CFG_LCD1_EN << ((di->id & 2) ? 1 : 0);
+	else
+		reg &= ~(DSI_CTRL_0_CFG_LCD1_EN << ((di->id & 2) ? 1 : 0));
+	writel(reg, &dsi->ctrl0);
+}
 
 void set_dsi_low_power_mode(struct pxa168fb_info *fbi)
 {
@@ -780,21 +826,6 @@ void set_dsi_low_power_mode(struct pxa168fb_info *fbi)
 	reg &= ~(0xf << 20);
 	reg |= 1 << DSI_CPU_CMD_1_CFG_TXLP_LPDT_SHIFT;
 	writel(reg, &dsi->cmd1);
-}
-
-void dsi_set_panel_intf(struct pxa168fb_info *fbi, bool on)
-{
-	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
-	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
-	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
-	int reg;
-
-	reg = readl(&dsi->ctrl0);
-	if (on)
-		reg |= DSI_CTRL_0_CFG_LCD1_EN << ((di->id & 2) ? 1 : 0);
-	else
-		reg &= ~(DSI_CTRL_0_CFG_LCD1_EN << ((di->id & 2) ? 1 : 0));
-	writel(reg, &dsi->ctrl0);
 }
 
 static void print_ack_errors(unsigned int packet)
@@ -823,14 +854,13 @@ static void print_ack_errors(unsigned int packet)
 	"DSI Protcl Err" };
 
 	pr_info("Ack error packet = 0x%x", packet);
-	for (i=0; i < 15; i++) {
-		if (packet & (1<<i))
-			pr_err("\t\tBit %d = %s",i, ack_error_info[i]);
+	for (i = 0; i < 15; i++) {
+		if (packet & (1 << i))
+			pr_err("\t\tBit %d = %s", i, ack_error_info[i]);
 	}
 }
 
-void dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
-		struct dsi_cmd_desc cmds[], int count)
+void dsi_cmd_array_rx_process(struct pxa168fb_info *fbi, struct dsi_buf *dbuf)
 {
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
@@ -840,26 +870,9 @@ void dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
 	    data_pointer, packet_count, byte_count;
 
 	memset(dbuf, 0x0, sizeof(struct dsi_buf));
-	dsi_cmd_array_tx(fbi, cmds, count);
-#if 0
-	/*will do BTA after command send, so the following code skip */
-	/* do the BTA: dphy bus turn around */
-	tmp = readl(&dsi->phy_ctrl2) & ~(0xf);
-	tmp |= 0x1;
-	writel(tmp, &dsi->phy_ctrl2);
-
-	count = 10000;
-	do {
-		count--;
-		tmp = readl(&dsi->phy_ctrl2);
-	} while (((tmp & 0xf) == 0x1) && count);
-	if (!count)
-		pr_err("dphy bus not turn around phy_ctrl2 0x%x\n",
-				readl(&dsi->phy_ctrl2)&0xf);
-#endif
 	timeout = 1000;
 	do {
-		timeout --;
+		timeout--;
 		tmp = readl(&dsi->irq_status);
 	} while (((tmp & 0x4) == 0) && timeout);
 	if (!timeout)
@@ -896,15 +909,16 @@ void dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
 		rx_reg = readl(&dsi->rx_ctrl);
 		rx_reg &= ~RX_PKT_RD_PTR_MASK;
 		rx_reg |= RX_PKT_RD_REQ | (i << RX_PKT_RD_PTR_SHIFT);
+		
 		writel(rx_reg, &dsi->rx_ctrl);
-		count = 10000;
+		timeout = 10000;
 		do {
-			count--;
+			timeout--;
 			rx_reg = readl(&dsi->rx_ctrl);
-		} while (rx_reg & RX_PKT_RD_REQ && count);
-		if (!count)
+		} while (rx_reg & RX_PKT_RD_REQ && timeout);
+		if (!timeout)
 			pr_err("Rx packet FIFO read request not assert\n");
-		parameter[i - data_pointer] = rx_reg & 0xff;		
+		parameter[i - data_pointer] = rx_reg & 0xff;
 	}
 	switch (parameter[0]) {
 	case DSI_DI_ACK_ERR_RESP:
@@ -931,8 +945,21 @@ void dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
 		dbuf->length = (parameter[2] << 8) | parameter[1];
 		memcpy(dbuf->data, &parameter[4], dbuf->length);
 		break;
-
 	}
+}
+
+void dsi_cmd_array_rx(struct pxa168fb_info *fbi, struct dsi_buf *dbuf,
+		struct dsi_cmd_desc cmds[], int count)
+{
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	struct dsi_regs *dsi = (struct dsi_regs *)di->regs;
+	u8 parameter[DSI_MAX_DATA_BYTES];
+	u32 i, rx_reg, timeout, tmp, packet,
+	    data_pointer, packet_count, byte_count;
+
+	dsi_cmd_array_tx(fbi, cmds, count);
+	dsi_cmd_array_rx_process(fbi,dbuf);
 }
 
 int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
@@ -943,27 +970,22 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 	u8 parameter[DSI_MAX_DATA_BYTES], loop;
 	u32 rx_reg, count, ecc, tmp, packet,
 	    data_pointer, packet_count, byte_count;
-
 	dsi_set_panel_intf(fbi, 0);
 	set_dsi_low_power_mode(fbi);
-
 	memset(parameter, 0x00, 4);
 	parameter[0] = 0x37; /* DSI_DI_SMRPS */
 	parameter[1] = 0x01;
 	parameter[2] = 0x00;
 	parameter[3] = calculate_ecc(parameter);
 	dsi_send_cmds(fbi, parameter, 4, 1);
-
 	parameter[0] = 0x06; /* DSI_DI_READ */
 	parameter[1] = addr;
 	parameter[2] = 0x00;
 	parameter[3] = calculate_ecc(parameter);
 	dsi_send_cmds(fbi, parameter, 4, 1);
-
 	tmp = readl(&dsi->phy_ctrl2) & ~(0xf);
 	tmp |= 0x1;
 	writel(tmp, &dsi->phy_ctrl2);
-
 	count = 10000;
 	do {
 		count--;
@@ -972,7 +994,6 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 	if (!count)
 		pr_err("dphy bus not turn around phy_ctrl2 0x%x\n",
 				readl(&dsi->phy_ctrl2)&0xf);
-
 	count = 10000;
 	do {
 		count--;
@@ -990,7 +1011,6 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 		tmp = readl(&dsi->rx0_header);
 		print_ack_errors(tmp);
 	}
-
 	packet = readl(&dsi->rx0_status);
 	if (packet & 0x80000000)
 		pr_debug("Rx packet 0 status valid, 0x%x\n", packet);
@@ -1005,7 +1025,6 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 	byte_count = tmp & 0xff;
 	pr_debug("Rx FIFO packet count %d, byte count %x\n",
 			packet_count, byte_count);
-
 	memset(parameter, 0x00, byte_count);
 	for (loop = data_pointer; loop < data_pointer + byte_count; loop++) {
 		rx_reg = readl(&dsi->rx_ctrl);
@@ -1021,13 +1040,11 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 			pr_err("Rx packet FIFO read request not assert\n");
 		parameter[loop - data_pointer] = rx_reg & 0xff;
 	}
-
 	ecc = calculate_ecc(parameter);
 	pr_info("DSI receive data:\n");
 	pr_info("rx_data_type  rx_dcs  rx_parameter  rx_ecc  ecc\n");
 	pr_info("0x%x          0x%x     0x%x          0x%x    0x%x",
 		parameter[0], parameter[1], parameter[2], parameter[3], ecc);
-
 	for (loop = 0; loop < (byte_count - 4); loop++)
 		pr_info("0x%x \t ", parameter[loop]);
 	pr_info("\n");
@@ -1036,7 +1053,6 @@ int dsi_read_data(struct pxa168fb_info *fbi, u8 addr)
 				parameter[3], ecc);
 		return -1;
 	}
-
 	/* put all lanes to LP-11 state  */
 	dsi_lanes_enable(fbi, 1);
 	dsi_set_panel_intf(fbi, 1);

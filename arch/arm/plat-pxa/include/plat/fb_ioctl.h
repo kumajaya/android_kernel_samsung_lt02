@@ -46,6 +46,7 @@
  */
 #define FB_IOCTL_FLIP_VID_BUFFER            _IO(FB_IOC_MAGIC, 8)
 
+#define FB_IOCTL_FLIP_VSYNC	            _IO(FB_IOC_MAGIC, 26)
 /* Get the current buffer information. User program could use it to display
  * anything directly. If developer wants to allocate multiple video layers,
  * try to use FB_IOCTL_CREATE_VID_BUFFER  to request a brand new video
@@ -93,9 +94,6 @@
 /* VDMA enable/disable */
 #define FB_IOCTL_VDMA_SET			_IO(FB_IOC_MAGIC, 25)
 
-#define FB_IOCTL_FLIP_VSYNC	            _IO(FB_IOC_MAGIC, 26)
-
-
 /* Global alpha blend controls - Maintaining compatibility with existing
    user programs. */
 #define FB_IOCTL_PUT_VIDEO_ALPHABLEND            0xeb
@@ -136,6 +134,8 @@
 #define FB_VMODE_BGR888UNPACK		0x107
 #define FB_VMODE_RGBA888		0x108
 #define FB_VMODE_BGRA888		0x109
+#define FB_VMODE_RGB888A		0x10A
+#define FB_VMODE_BGR888A		0x10B
 
 #define FB_VMODE_YUV422PACKED               0x0
 #define FB_VMODE_YUV422PACKED_SWAPUV        0x1
@@ -147,6 +147,9 @@
 #define FB_VMODE_YUV420PLANAR_SWAPUV        0x7
 #define FB_VMODE_YUV420PLANAR_SWAPYUorV     0x8
 #define FB_VMODE_YUV422PACKED_IRE_90_270    0x9
+#define FB_VMODE_YUV420SEMIPLANAR           0xA
+#define FB_VMODE_YUV420SEMIPLANAR_SWAPUV    0xB
+
 
 #define FB_HWCMODE_1BITMODE                 0x0
 #define FB_HWCMODE_2BITMODE                 0x1

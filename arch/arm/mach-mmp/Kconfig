@@ -214,6 +214,7 @@ config CPU_PXA988
 	select ARCH_PROVIDES_UDELAY
 	select ARM_HAS_SG_CHAIN
 	select EOF_FC_WORKAROUND
+	select DISP_DFC
 	help
 	  Say 'Y' here if you want to support the Marvell pxa988-base
 	  platforms.
@@ -262,6 +263,11 @@ config EOF_FC_WORKAROUND
 	bool
 	help
 	  Enables EOF workaround for DDR freq-change.
+
+config DISP_DFC
+	bool
+	help
+	  Enables display dynamic frequency change to avoid EMI.
 
 config CORESIGHT_SUPPORT
 	bool "support save/restore coresight setting when enter/exit LPM"

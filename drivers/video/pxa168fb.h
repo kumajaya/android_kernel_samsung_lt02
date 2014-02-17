@@ -151,7 +151,7 @@ struct lcd_regs {
 #define LCD_TCLK_DIV					(0x009C)
 
 /* dither configure */
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 #define LCD_DITHER_CTRL				(0x01EC)
 #else
 #define LCD_DITHER_CTRL				(0x00A0)
@@ -170,7 +170,7 @@ struct lcd_regs {
 #define DITHER_EN1					(1)
 
 /* dither table data was fixed by video bpp of input and output*/
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 #define DITHER_TB_4X4_INDEX0		(0x6e4ca280)
 #define DITHER_TB_4X4_INDEX1		(0x5d7f91b3)
 #define DITHER_TB_4X8_INDEX0		(0xb391a280)
@@ -498,6 +498,8 @@ struct lcd_regs {
 #define dma_hsmooth(vid, val)		((val ? 1 : 0) << ((vid) ? 6 : 14))
 #define dma_mask(vid)	(dma_palette(1) | dma_fmt(vid, 0xf) | dma_csc(vid, 1) \
 	| dma_swaprb(vid, 1) | dma_swapuv(vid, 1) | dma_swapyuv(vid, 1))
+#define swap_spuv(id)			((id) ? (((id) == 1) ? 2 : 4) : 1)
+#define yuvsp_mask(id)			((id) ? (((id) == 1) ? 2 : 4) : 1)
 
 /* DMA Control 1 Register */
 #define LCD_SPU_DMA_CTRL1			0x0194
@@ -566,8 +568,12 @@ struct lcd_regs {
 
 /* Smart or Dumb Panel Clock Divider */
 #define LCD_CFG_SCLK_DIV			0x01A8
-#define	 SCLK_SOURCE_SELECT(src)		((src)<<31)
-#define	 SCLK_SOURCE_SELECT_MASK		0x80000000
+#define	 SCLK_SOURCE_SELECT(src)		((src)<<30)
+#define	 SCLK_SOURCE_SELECT_MASK		0xc0000000
+#define  SCLK_SOURCE_AXI 			(0x0 << 30)
+#define  SCLK_SOURCE_DISP1 			(0x1 << 30)
+#define  SCLK_SOURCE_DISP2 			(0x2 << 30)
+#define  SCLK_SOURCE_DSI_PLL 			(0x3 << 30)
 #define  SCLK_DISABLE				(1<<28)
 #define	 CLK_FRACDIV(frac)			((frac)<<16)
 #define	 CLK_FRACDIV_MASK			0x0FFF0000
@@ -857,6 +863,7 @@ struct lcd_regs {
 #define LCD_PN2_SCLK_DIV			(0x01EC)
 #define LCD_PN2_TCLK_DIV			(0x01F0)
 #define LCD_LVDS_SCLK_DIV_WR			(0x01F4)
+#define LCD_YUV420SP_FMT_CTRL			(0x01F4)
 #define LCD_LVDS_SCLK_DIV_RD			(0x01FC)
 #define PN2_LCD_DMA_START_ADDR_Y0		(0x0200)
 #define PN2_LCD_DMA_START_ADDR_U0		(0x0204)
@@ -914,7 +921,7 @@ struct lcd_regs {
 #define ALL_LAYER_ALPHA_SEL			(0x02F4)
 
 /* pxa988 has different MASTER_CTRL from MMP3/MMP2 */
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 #define TIMING_MASTER_CONTROL			(0x01F4)
 #define MASTER_ENH(id)				(1 << ((id) + 4))
 #define MASTER_ENV(id)				(1 << ((id) + 6))
@@ -978,6 +985,7 @@ struct lcd_regs {
 #define GMODE_PALETTE4BIT	0x9
 #define GMODE_PALETTE8BIT	0xa
 #define GMODE_RESERVED		0xb
+#define GMODE_YUV420SPLANAR	0xc
 
 /*
  * define for DMA control 1 register
@@ -1407,7 +1415,7 @@ struct dsi_regs {
  * it will be used in dsi_set_dphy() in pxa688_phy.c
  * as low power mode clock.
  */
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 #define DSI_ESC_CLK				52  /* Unit: Mhz */
 #define DSI_ESC_CLK_T				19  /* Unit: ns */
 #else

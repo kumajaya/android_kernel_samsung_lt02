@@ -38,9 +38,13 @@
 #include <linux/pm_runtime.h>
 #include <mach/irqs.h>
 #include <mach/gpio.h>
-#include <mach/regs-apmu.h>
+#include <mach/features.h>
 #include "pxa168fb_common.h"
+#include <mach/regs-apmu.h>
 #include <linux/memblock.h>
+#include <linux/workqueue.h>
+#include <linux/irq.h>
+#include <linux/gpio.h>
 
 /* interrupt timestamp collection to get:
  * 0. ITC_NONE		don't enable any timestamp collection
@@ -93,12 +97,35 @@ static int vf0_count;
 static int vf1_count;
 static struct timer_list vsync_timer;
 
+#ifdef CONFIG_KERNEL_DEBUG_SEC
+extern void sec_getlog_supply_fbinfo(struct fb_info *fb);
+#endif
+
+#if 0
+#if defined(CONFIG_MACH_WILCOX)
+#define LCD_ESD_RECOVERY
+#define LCD_ESD_INTERRUPT
+#endif
+#endif
+
+#if defined(LCD_ESD_RECOVERY)
+#define GPIO_ESD_DET	(19)
+extern int get_panel_id(void);
+static struct pxa168fb_info *fbi_global = NULL;
+static int esd_irq;
+static struct workqueue_struct *esd_wq;
+static struct work_struct esd_work;
+struct delayed_work esd_dwork;
+#define LCD_ESD_INTERVAL	(1000)
+#endif
+
 static void vsync_check_timer(unsigned long data)
 {
 	int path = DBG_VSYNC_PATH;
 	int mask = vsync_imask(path) | gf0_imask(path) | gf1_imask(path) |
 		vf0_imask(path) | vf1_imask(path);
 
+	/* disable count interrupts */
 	irq_mask_set(path, mask, 0);
 	irq_mask_eof(path);
 
@@ -209,6 +236,19 @@ void dma_ctrl_set(int id, int ctrl1, u32 mask, u32 value)
 		__raw_writel(tmp2, reg);
 }
 
+void yuvsp_fmt_ctrl(u32 mask, u32 value)
+{
+	struct pxa168fb_info *fbi = gfx_info.fbi[0];
+	u32 reg = (u32)fbi->reg_base + LCD_YUV420SP_FMT_CTRL;
+	u32 tmp1, tmp2;
+
+	tmp1 = tmp2 = __raw_readl(reg);
+	tmp2 &= ~mask;
+	tmp2 |= value;
+	if (tmp1 != tmp2)
+		__raw_writel(tmp2, reg);
+}
+
 /*
  * This is a workaround for still image capture:
  * As DxO and LCD DMA can't access DDR at the same time
@@ -226,7 +266,7 @@ void panel_dma_ctrl(bool flag)
 
 	tmp1 = tmp2 = __raw_readl(reg);
 
-	if (cpu_pxa98x_stepping() < PXA98X_Z3)
+	if (has_feat_video_replace_graphics_dma())
 		mask = CFG_DMA_ENA_MASK;
 	else
 		mask = CFG_GRA_ENA_MASK;
@@ -247,44 +287,21 @@ void panel_dma_ctrl(bool flag)
 	spin_unlock_irqrestore(&fbi->var_lock, flags);
 }
 
-static int irq_lcd_count;
 void irq_mask_set(int id, u32 mask, u32 val)
 {
 	struct pxa168fb_info *fbi = gfx_info.fbi[id];
 	u32 temp = readl(fbi->reg_base + SPU_IRQ_ENA);
-		u32 addr = (u32)fbi->reg_base, i;
-	
-		// debug irq control
-		if ((atomic_read(&fbi->irq_en_count) > 0) &&
-				(mask == display_done_imask(fbi->id)) && (val == 0)) {
-			printk("LCD IRQ Control ERROR: %s, irq en count %d\n",
-					__func__, atomic_read(&fbi->irq_en_count));
-		}
+	int retry = 0;
 
 	temp &= ~mask; temp |= val;
 	writel(temp, fbi->reg_base + SPU_IRQ_ENA);
-		// debug reg set
-#if 1
-		while (temp != readl(fbi->reg_base + SPU_IRQ_ENA) && irq_lcd_count < 10000) {
-			printk("LCD IRQ REG ERROR: %s, temp: 0x%x reg_en: 0x%x\n",
-					__func__, temp, readl(fbi->reg_base + SPU_IRQ_ENA));
-			if (!irq_lcd_count) {
-				printk("%s, LCD clock: 0x%x\n", __func__, readl(APMU_LCD));
-				pr_info("\n Dump display controller regs\n");
-				for (i = 0; i < 0x300; i += 4) {
-					if (!(i % 16))
-						printk("\n0x%3x: ", i);
-					printk(" %8x", readl(addr + i));
-				}
-				pr_info("\n");
-			}
-			irq_lcd_count ++;
+	/* FIXME: irq register write failure */
+	while (temp != readl(fbi->reg_base + SPU_IRQ_ENA) && retry < 10000) {
+		retry++;
 		writel(temp, fbi->reg_base + SPU_IRQ_ENA);
 	}
-		if (irq_lcd_count>=1000)
-			schedule_delayed_work(&fbi->panic_work, msecs_to_jiffies(1000));
-#endif
-
+	if (retry)
+		irq_retry_count = retry;
 }
 
 void irq_status_clear(int id, u32 mask)
@@ -467,6 +484,8 @@ static int pxa168fb_power(struct pxa168fb_info *fbi,
 static void set_mode(struct pxa168fb_info *fbi, struct fb_var_screeninfo *var,
 		     const struct fb_videomode *mode, int pix_fmt, int ystretch)
 {
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+
 	dev_dbg(fbi->fb_info->dev, "Enter %s\n", __func__);
 	set_pix_fmt(var, pix_fmt);
 
@@ -478,6 +497,8 @@ static void set_mode(struct pxa168fb_info *fbi, struct fb_var_screeninfo *var,
 	else
 		var->yres_virtual = max(var->yres, var->yres_virtual);
 	var->grayscale = 0;
+	var->width = mi->width;
+	var->height = mi->height;
 	var->accel_flags = FB_ACCEL_NONE;
 	var->pixclock = mode->pixclock;
 	var->left_margin = mode->left_margin;
@@ -489,14 +510,94 @@ static void set_mode(struct pxa168fb_info *fbi, struct fb_var_screeninfo *var,
 	var->sync = mode->sync;
 	var->vmode = FB_VMODE_NONINTERLACED;
 	var->rotate = FB_ROTATE_UR;
-	#if defined(CONFIG_MACH_LT02) || defined(CONFIG_MACH_COCOA7)
-	var->width = 154;
-	var->height = 90;
-	#else
-	var->width = 154;
-	var->height = 90;
-	#endif
 }
+
+/*
+ * When DSI is used to refresh panel, the timing configuration should
+ * follow the rules below:
+ * 1.Because Async fifo exists between the pixel clock and byte clock
+ *   domain, so there is no strict ratio requirement between pix_clk
+ *   and byte_clk, we just need to meet the following inequation to
+ *   promise the data supply from LCD controller:
+ *   pix_clk * (nbytes/pixel) >= byte_clk * lane_num
+ *   (nbyte/pixel: the real byte in DSI transmission)
+ *   a)16-bit format n = 2; b) 18-bit packed format n = 18/8 = 9/4;
+ *   c)18-bit unpacked format  n=3; d)24-bit format  n=3;
+ *   if lane_num = 1 or 2, we can configure pix_clk/byte_clk = 1:1 >
+ *   lane_num/nbytes/pixel
+ *   if lane_num = 3 or 4, we can configure pix_clk/byte_clk = 2:1 >
+ *   lane_num/nbytes/pixel
+ * 2.The horizontal sync for LCD is synchronized from DSI,
+ *    so the refresh rate calculation should base on the
+ *    configuration of DSI.
+ *    byte_clk = (h_total * nbytes/pixel) * v_total * fps / lane_num;
+ */
+static void disp_clk_cal_set(struct pxa168fb_info *fbi)
+{
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct fb_var_screeninfo *var = &fbi->fb_info->var;
+	struct dsi_info *di = (struct dsi_info *)mi->phy_info;
+	u32 clk_req, clk_real, frm_pixels;
+	u64 div;
+
+	if (!var->pixclock) {
+		pr_err("invalid pixclock\n");
+		return;
+	}
+
+	if (!fbi->path_clk) {
+		pr_info("no path clock\n");
+		return;
+	}
+
+	if (!fbi->phy_clk && (mi->phy_type & (DSI | DSI2DPI | LVDS))) {
+		pr_info("no phy clock while DSI\n");
+		return;
+	}
+
+	div = 1000000000000ll;
+	do_div(div, var->pixclock);
+	clk_req = (u32)div;
+
+	/*cal clock according to pixclock */
+	if (mi->phy_type & (DSI | DSI2DPI | LVDS)) {
+		u32 phy_rate, path_rate;
+
+		phy_rate = clk_req * di->bpp / di->lanes; /*bit clock*/
+		path_rate = phy_rate / ((di->lanes > 2) ? 4 : 8);
+
+		clk_set_rate(fbi->phy_clk, phy_rate);
+		pr_info("set phy clock %d Mhz\n", phy_rate / 1000000);
+
+		clk_set_rate(fbi->path_clk, path_rate);
+		pr_info("set path clock %d Mhz\n", path_rate / 1000000);
+
+		path_rate = clk_get_rate(fbi->path_clk)/1000000;
+		phy_rate = clk_get_rate(fbi->phy_clk);
+		clk_real = phy_rate * di->lanes / di->bpp / 1000000;
+		phy_rate /= 1000000;
+		mi->sclk_default = phy_rate; /* unit MHz */
+		pr_info("real path clock %d Mhz, phy clock %d Mhz, pixclock %d Mhz\n",
+				(int) path_rate, (int) phy_rate, clk_real);
+	} else {
+		clk_set_rate(fbi->path_clk, clk_req);
+		pr_info("set path clock %d Mhz\n", clk_req / 1000000);
+
+		clk_real = clk_get_rate(fbi->path_clk);
+		mi->sclk_default = clk_real / 1000000; /* unit MHz */
+		pr_info("real path clock %d Mhz\n", clk_real / 1000000);
+	}
+
+	div = 1000000000000ll;
+	do_div(div, clk_real*1000000);
+	var->pixclock = (u32)div;
+	frm_pixels = (var->xres + var->left_margin + var->hsync_len
+		 + var->right_margin) * (var->yres + var->upper_margin
+		+ var->vsync_len + var->lower_margin);
+	fbi->frm_usec = (var->pixclock / 1000) * frm_pixels / 1000;
+	pr_info("result fps = %d\n", (int) (1000000 / fbi->frm_usec));
+}
+
 
 /*
  * The hardware clock divider has an integer and a fractional
@@ -543,31 +644,23 @@ static void set_clock_divider(struct pxa168fb_info *fbi)
 		} else if (mi->phy_type & LVDS)
 			lcd_clk_set(fbi->id, clk_lvds_wr, 0xffffffff, val);
 
-		if (!var->pixclock) {
 			divider_int = mi->sclk_div & CLK_INT_DIV_MASK;
 			if (!divider_int)
-				divider_int = 1;
-
+			divider_int = 1;
 			if (!clk_get_rate(fbi->clk)) {
-				pr_err("%s: fbi->clk get rate null\n",
-						__func__);
-				return;
-			}
-			if ((mi->phy_type & (DSI | DSI2DPI)) && di) {
-				divider_int = mi->sclk_div & DSI1_BITCLK_DIV_MASK;
-				divider_int = divider_int>>8;
-					if (!divider_int)
-						divider_int = 1;
-
-				x = (clk_get_rate(fbi->clk) * di->lanes) /
-					(di->bpp * 1000) / divider_int;
-			} else
-				x = clk_get_rate(fbi->clk) / divider_int / 1000;
-
-			var->pixclock = 1000000000 / x;
-			pr_debug("%s pixclock %d x %d divider_int %d\n",
-				__func__, var->pixclock, x, divider_int);
+			pr_err("%s: fbi->clk get rate null\n",
+					__func__);
+			return;
 		}
+		if ((mi->phy_type & (DSI | DSI2DPI)) && di)
+			x = (clk_get_rate(fbi->clk) * di->lanes) /
+				(di->bpp * 1000);
+		else
+			x = clk_get_rate(fbi->clk) / divider_int / 1000;
+
+		var->pixclock = 1000000000 / x;
+		pr_debug("%s pixclock %d x %d divider_int %d\n",
+			__func__, var->pixclock, x, divider_int);
 		x = var->xres + var->left_margin + var->hsync_len +
 			var->right_margin;
 		fbi->frm_usec = var->pixclock * (var->yres + var->upper_margin
@@ -629,7 +722,7 @@ static void set_dumb_panel_control(struct fb_info *info)
 	dev_dbg(info->dev, "Enter %s\n", __func__);
 
 	/* Preserve enable flag */
-	x = readl(fbi->reg_base + intf_ctrl(fbi->id)) & 0x00000001;
+	x = readl(fbi->reg_base + intf_ctrl(fbi->id));
 	x |= (fbi->is_blanked ? 0x7 : mi->dumb_mode) << 28;
 	if (fbi->id == 1) {
 		/* enable AXI urgent flag and vblank(for 3d formater) */
@@ -645,7 +738,6 @@ static void set_dumb_panel_control(struct fb_info *info)
 	x |= (info->var.sync & FB_SYNC_VERT_HIGH_ACT) ? 0 : 0x00000008;
 	x |= (info->var.sync & FB_SYNC_HOR_HIGH_ACT) ? 0 : 0x00000004;
 	x |= mi->invert_pixclock ? 0x00000002 : 0;
-	x |= 0x1;
 	writel(x, fbi->reg_base + intf_ctrl(fbi->id));	/* FIXME */
 }
 
@@ -719,7 +811,7 @@ static void set_dumb_screen_dimensions(struct fb_info *info)
 			__func__, fbi->id, &regs->screen_active);
 
 	/* resolution, active */
-	writel((v->yres << 16) | v->xres, &regs->screen_active);
+	writel(((v->yres+mi->last_dummy_lines) << 16) | v->xres, &regs->screen_active);
 
 	if ((mi->phy_type & (DSI2DPI | DSI)) && di) {
 		vec = ((di->lanes <= 2) ? 1 : 2) * 10 * di->bpp / 8 / di->lanes;
@@ -755,7 +847,7 @@ static void set_dumb_screen_dimensions(struct fb_info *info)
 
 	x = v->xres + v->right_margin + v->hsync_len + v->left_margin;
 	x = x * vec / 10;
-	y = v->yres + v->lower_margin + v->vsync_len + v->upper_margin;
+	y = v->yres + mi->last_dummy_lines + v->lower_margin + v->vsync_len + v->upper_margin;
 	/* screen total size */
 	writel((y << 16) | x, &regs->screen_size);
 
@@ -786,6 +878,7 @@ static int pxa168fb_set_par(struct fb_info *info)
 	pix_fmt = determine_best_pix_fmt(var, fbi);
 	if (pix_fmt < 0)
 		return pix_fmt;
+
 	fbi->pix_fmt = pix_fmt;
 	set_pix_fmt(var, pix_fmt);
 
@@ -794,7 +887,6 @@ static int pxa168fb_set_par(struct fb_info *info)
 	if (!var->yres_virtual)
 		var->yres_virtual = var->yres *
 			((mi->mmap > 1) ? mi->mmap : 2);
-
 	var->grayscale = 0;
 	var->accel_flags = FB_ACCEL_NONE;
 	var->rotate = FB_ROTATE_UR;
@@ -915,7 +1007,7 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 				struct fb_info *info)
 {
 	struct pxa168fb_info *fbi = info->par;
-
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
 
 	dev_dbg(info->dev, "Enter %s\n", __func__);
 
@@ -924,18 +1016,17 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 	if (fbi->shadowreg.flags == UPDATE_ADDR)
 		/* only if address needs to be updated */
 		pxa168fb_set_regs(fbi, &fbi->shadowreg);
-
 	/*
-	 * 3 buf support, if two buffers deliverd in one vsync,
+	 *if only 2 buffers, wait for vsync for each pan display
+	 *if 3 buffurs support, and two buffers deliverd in one vsync,
 	 * second frame need to wait for vsync
 	 */
-
-	if ((atomic_dec_and_test(&fbi->vsync_cnt) )&& NEED_VSYNC(fbi)){
-
-		pr_debug("2 frames delivered in one vsync\n");
+	if ((mi->mmap < 3 || atomic_dec_and_test(&fbi->vsync_cnt)) &&
+			NEED_VSYNC(fbi)) {
+		dev_dbg(info->dev, "need to wait for vsync, vsync_cnt = %d\n",
+				atomic_read(&fbi->vsync_cnt));
 		wait_for_vsync(fbi, SYNC_SELF);
 	}
-
 	return 0;
 }
 
@@ -943,9 +1034,7 @@ static int pxa168fb_pan_display(struct fb_var_screeninfo *var,
 static irqreturn_t pxa168fb_threaded_handle_irq(int irq, void *dev_id)
 {
 	if (atomic_read(&framedone)) {
-		if (cpu_is_pxa988_z2() || cpu_is_pxa986_z2())
-			wakeup_fc_seq();
-		else if (cpu_is_pxa988_z3() || cpu_is_pxa986_z3())
+		if (cpu_is_pxa988_z3() || cpu_is_pxa986_z3())
 			wakeup_ddr_fc_seq();
 		atomic_set(&framedone, 0);
 	}
@@ -954,12 +1043,28 @@ static irqreturn_t pxa168fb_threaded_handle_irq(int irq, void *dev_id)
 }
 #endif
 
+#ifdef CONFIG_DISP_DFC
+extern atomic_t disp_dfc;
+extern atomic_t disp_pll1;
+#endif
 static irqreturn_t pxa168fb_handle_irq(int irq, void *dev_id)
 {
 	struct pxa168fb_info *fbi = (struct pxa168fb_info *)dev_id;
 	u32 isr_en = readl(fbi->reg_base + SPU_IRQ_ISR) &
 		readl(fbi->reg_base + SPU_IRQ_ENA);
+	struct pxa168fb_mach_info *mi;
 	u32 id, dispd, err, sts;
+
+#ifdef CONFIG_DISP_DFC
+	if (atomic_read(&disp_dfc) && (isr_en & display_done_imask(0))
+		&& !(isr_en & vsync_imask(0))) {
+		mi = fbi->dev->platform_data;
+		lcd_clk_set(fbi->id, clk_sclk, 0xffffffff, mi->sclk_div);
+		if (atomic_read(&disp_pll1))
+			__raw_writel(mi->sclk_rst, (void __iomem *)APMU_LCD);
+		atomic_set(&disp_dfc, 0);
+	}
+#endif
 
 #ifdef CONFIG_EOF_FC_WORKAROUND
 	if (isr_en & display_done_imask(0))
@@ -967,7 +1072,7 @@ static irqreturn_t pxa168fb_handle_irq(int irq, void *dev_id)
 #endif
 
 #ifdef CONFIG_VIDEO_MVISP
-	if (cpu_pxa98x_stepping() < PXA98X_A0) {
+	if (has_feat_isp_reset()) {
 		if (isr_en & display_done_imask(0))
 			isp_reset_clock();
 	}
@@ -1117,12 +1222,10 @@ static void debug_identify_called_ioctl(struct fb_info *info, int cmd,
 		dev_dbg(info->dev, "FB_IOCTL_FLIP_VID_BUFFER with arg = %08x\n",
 			 (unsigned int)arg);
 		break;
-
 	case FB_IOCTL_FLIP_VSYNC:
 		dev_dbg(info->dev, "FB_IOCTL_FLIP_VSYNC with arg = %08x\n",
 			 (unsigned int)arg);
 		break;
-
 	case FB_IOCTL_GET_FREELIST:
 		dev_dbg(info->dev, "FB_IOCTL_GET_FREELIST with arg = %08x\n",
 			 (unsigned int)arg);
@@ -1332,7 +1435,6 @@ static int pxa168fb_release(struct fb_info *info, int user)
 	struct regshadow *shadowreg = &fbi->shadowreg;
 	u32 flags;
 
-
 	if (fbi->debug & (1<<4))
 		return 0;
 
@@ -1359,12 +1461,10 @@ static int pxa168fb_release(struct fb_info *info, int user)
 	flags = UPDATE_ADDR | UPDATE_MODE | UPDATE_VIEW;
 	pxa168fb_set_var(info, shadowreg, flags);
 
-
 	if (NEED_VSYNC(fbi))
 		wait_for_vsync(fbi, SYNC_SELF);
 	else
 		pxa168fb_set_regs(fbi, shadowreg);
-
 
 	return 0;
 }
@@ -1413,16 +1513,15 @@ static int pxa168fb_init_mode(struct fb_info *info,
 		fb_videomode_to_var(&info->var, m);
 
 	/* Init settings. */
-	if (mi->xres_virtual)
-		var->xres_virtual = mi->xres_virtual;
+	if (mi->xres_alignment)
+		var->xres_virtual = ALIGN(var->xres, mi->xres_alignment);
 	else
 		var->xres_virtual = var->xres;
-	//var->yres_virtual = var->yres * 2;
-	var->yres_virtual = var->yres *
-                        ((mi->mmap > 1) ? mi->mmap : 2);
 
-
-#if 0
+	if (mi->yres_alignment)
+		var->yres_virtual = ALIGN(var->yres, mi->yres_alignment) * 2;
+	else
+		var->yres_virtual = var->yres * 2;
 	if (!var->pixclock) {
 		u32 total_w, total_h;
 		u64 div_result;
@@ -1437,7 +1536,6 @@ static int pxa168fb_init_mode(struct fb_info *info,
 		do_div(div_result, total_w * total_h * refresh);
 		var->pixclock = (u32)div_result;
 	}
-#endif
 	return ret;
 }
 
@@ -1447,7 +1545,7 @@ static void pxa168fb_set_default(struct pxa168fb_info *fbi,
 	struct lcd_regs *regs = get_regs(fbi->id);
 	u32 dma_ctrl1 = 0x2032ff81, flag, tmp;
 
-	if (cpu_pxa98x_stepping() < PXA98X_Z3)
+	if (has_feat_video_replace_graphics_dma())
 		dma_ctrl1 = 0x20320081;
 	/*
 	 * LCD Global control(LCD_TOP_CTRL) should be configed before
@@ -1455,11 +1553,11 @@ static void pxa168fb_set_default(struct pxa168fb_info *fbi,
 	 */
 	tmp = readl(fbi->reg_base + LCD_TOP_CTRL);
 	tmp |= 0xfff0;		/* FIXME */
-	if (cpu_pxa98x_stepping() < PXA98X_Z3)
+	if (has_feat_video_replace_graphics_dma())
 		tmp |= 0x1 << 22;	/*TV DMA object go to panel */
 	writel(tmp, fbi->reg_base + LCD_TOP_CTRL);
 
-	if (cpu_pxa98x_stepping() < PXA98X_Z3) {
+	if (has_feat_video_replace_graphics_dma()) {
 		tmp = readl(fbi->reg_base + LCD_AFA_ALL2ONE);
 		tmp &= 0xfffffcf0;
 
@@ -1537,11 +1635,10 @@ static int __init get_boot_startaddr(char *str)
 {
 	u32 fb_address;
 	char *endp;
-	
+
 	fb_address = memparse(str, &endp);
 	disp_start_addr = fb_address;
 	skip_power_on = 1;
-
 	printk("get_boot_startaddr: fb_address = 0x%8x\n", fb_address);
 	return 1;
 }
@@ -1553,14 +1650,14 @@ void pxa988_reserve_fb_mem(void)
 
 	if (!skip_power_on)
 		return;
-	
+
 	/* make sure that reserved base address and size is MB aligned */
 	if (DEFAULT_FB_SIZE != (DEFAULT_FB_SIZE & (~0xfffff)))
-		fb_size_align = (DEFAULT_FB_SIZE & (~0xfffff)) + 0x100000;        
-	
+		fb_size_align = (DEFAULT_FB_SIZE & (~0xfffff)) + 0x100000;
+
 	if (disp_start_addr != (disp_start_addr & (~0xfffff)))
 		pr_err("%s: disp_start_addr is not MB aligned, 0x%8x\n", __func__, disp_start_addr);
-	
+
 	BUG_ON(memblock_reserve(disp_start_addr, fb_size_align) != 0);
 	memblock_free(disp_start_addr, fb_size_align);
 	memblock_remove(disp_start_addr, fb_size_align);
@@ -1569,91 +1666,104 @@ void pxa988_reserve_fb_mem(void)
 }
 
 static int init_once;
-static int _pxa168fb_suspend(struct pxa168fb_info *fbi)
+static int pxa168fb_disable(struct pxa168fb_info *fbi)
 {
 	struct fb_info *info = fbi->fb_info;
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct pxa168fb_mipi_lcd_driver *lcd_driver = mi->lcd_driver;
 	u32 mask = CFG_GRA_ENA_MASK;
+	u32 x;
 
-	printk("pxa168fb_suspend\n");
+	pr_info("pxa168fb.%d disable +\n", fbi->id);
+	if (lcd_driver)
+		lcd_driver->disable(fbi);
 
-	/* notify others */
-	fb_set_suspend(info, 1);
+	if (mi->exter_brige_pwr)
+		mi->exter_brige_pwr(fbi,0);
 
-#ifdef CONFIG_EOF_FC_WORKAROUND
-	atomic_set(&displayon, 0);
-	if (atomic_read(&fc_trigger)) {
-		if (cpu_is_pxa988_z2() || cpu_is_pxa986_z2())
-			wakeup_fc_seq();
-		else if (cpu_is_pxa988_z3() || cpu_is_pxa986_z3())
-			wakeup_ddr_fc_seq();
+	if (mi->phy_type & (DSI | DSI2DPI))
+	{
+		dsi_reset(fbi, 1);
 	}
-#endif
 
 	/* stop dma transaction */
 #ifndef CONFIG_MMP_V4L2_OVERLAY
 	mask |= CFG_DMA_ENA_MASK;
 #endif
 	dma_ctrl_set(fbi->id, 0, mask, 0);
+	/* Disable DMA path, it will reset the blank idle signal */
+	x = readl(fbi->reg_base + intf_ctrl(fbi->id));
+	writel(x & (~CFG_DUMB_ENA_MASK), fbi->reg_base + intf_ctrl(fbi->id));
 
 	/* disable external panel power */
 	if (pxa168fb_power(fbi, mi, 0))
 		pr_err("%s %d pxa168fb_power control failed!\n",
-			 __func__, __LINE__);
-
-	if (mi->phy_type & (DSI | DSI2DPI))
-		dsi_reset(fbi, 1);
+				__func__, __LINE__);
 
 	spin_lock(&fbi->var_lock);
 	fbi->active = 0;
+
 	/* Before disable lcd clk, disable all lcd interrupts */
 	if (!fbi->id) {
 		/* Only operate on panel path is enough */
 		fbi->irq_mask = readl(fbi->reg_base + SPU_IRQ_ENA);
 		irq_mask_set(fbi->id, 0xffffffff, 0);
 	}
-
 	spin_unlock(&fbi->var_lock);
 
-	if (fbi->id != 1) {
+	mutex_lock(&fbi->access_ok);
+	if (mi->no_legacy_clk && fbi->id != 1) {
+		if (fbi->phy_clk)
+			clk_disable(fbi->phy_clk);
+		if (fbi->path_clk)
+			clk_disable(fbi->path_clk);
+	} else if (fbi->id != 1) {
 		/* disable pixel clock, expect TV path which need it
 		 * for audio playback @ early suspend */
 		lcd_clk_set(fbi->id, clk_sclk, SCLK_DISABLE, SCLK_DISABLE);
 	}
-
-	pr_debug("pxa168fb.%d suspended\n", fbi->id);
+	mutex_unlock(&fbi->access_ok);
+	pr_info("pxa168fb.%d disable -\n", fbi->id);
 	return 0;
+
 }
 
-static int _pxa168fb_resume(struct pxa168fb_info *fbi)
+static int pxa168fb_enable(struct pxa168fb_info *fbi)
 {
 	struct fb_info *info = fbi->fb_info;
 	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
-	printk("pxa168fb_resume\n");
-	
+	u32 x;
+
+	pr_info("pxa168fb.%d enable +\n", fbi->id);
+
+	mutex_lock(&fbi->access_ok);
 	/* Calculate clock divisor. */
 	if (!init_once) {
 		pxa168fb_set_default(fbi, mi);	/* FIXME */
-		set_clock_divider(fbi);
+		/* fbi clk exists = legacy */
+		if (mi->no_legacy_clk)
+			disp_clk_cal_set(fbi);
+		else
+			set_clock_divider(fbi);
 		init_once = 1;
 	}
 
-	if (fbi->id != 1) {
+	if (mi->no_legacy_clk && fbi->id != 1) {
+		if (fbi->path_clk)
+			clk_enable(fbi->path_clk);
+		if (fbi->phy_clk)
+			clk_enable(fbi->phy_clk);
+	} else if (fbi->id != 1)
 		/* enable pixel clock */
 		lcd_clk_set(fbi->id, clk_sclk, SCLK_DISABLE, 0);
-	}
+	mutex_unlock(&fbi->access_ok);
 
 	/* enable external panel power */
 	if (pxa168fb_power(fbi, mi, 1)) {
 		pr_err("%s %d pxa168fb_power control failed!\n",
-			 __func__, __LINE__);
+				__func__, __LINE__);
 		return -EINVAL;
 	}
-
-	/* register setting should retain so no need to set again.
-	 * pxa168fb_set_par(info);
-	 * pxa168fb_set_default(fbi, mi);
-	 */
 
 	/* initialize external phy if needed */
 	if (mi->phy_init && mi->phy_init(fbi)) {
@@ -1670,7 +1780,6 @@ static int _pxa168fb_resume(struct pxa168fb_info *fbi)
 		irq_mask_set(fbi->id, 0xffffffff, fbi->irq_mask);
 
 	fbi->active = 1;
-	pxa168fb_set_par(info);
 	spin_unlock(&fbi->var_lock);
 
 	/* restore dma after resume */
@@ -1681,11 +1790,97 @@ static int _pxa168fb_resume(struct pxa168fb_info *fbi)
 		set_dma_active(ovly_info.fbi[fbi->id]);
 #endif
 #endif
+	/* Need enable the DMA path */
+	x = readl(fbi->reg_base + intf_ctrl(fbi->id));
+	writel(x | CFG_DUMB_ENA_MASK, fbi->reg_base + intf_ctrl(fbi->id));
+
+	pr_info("pxa168fb.%d enable -\n", fbi->id);
+	return 0;
+}
+
+int pxa168fb_reinit(struct pxa168fb_info *fbi)
+{
+	pxa168fb_disable(fbi);
+	pxa168fb_enable(fbi);
+	set_dma_active(fbi);
+
+	return 0;
+}
+
+static int _pxa168fb_suspend(struct pxa168fb_info *fbi)
+{
+	struct fb_info *info = fbi->fb_info;
+
+	pr_info("pxa168fb.%d suspend +\n", fbi->id);
+	mutex_lock(&fbi->output_lock);
+#ifdef LCD_ESD_RECOVERY
+#ifdef LCD_ESD_INTERRUPT
+	if (esd_irq) {
+		/*
+		 * Block pending interrupt after irq disabled.
+		 * if CONFIG_HARDIRQS_SW_RESEND is set, 
+		 * pending irq is re-send when irq is enabled.
+		 */
+		irq_set_irq_type(esd_irq, IRQF_TRIGGER_NONE);
+		disable_irq(esd_irq);
+		pr_info("%s, disable esd_irq : %d\n", __func__, esd_irq);
+	}
+#endif
+#endif
+	fbi->output_on = false;
+	pxa168fb_clear_framebuffer(info);
+	/* notify others */
+	fb_set_suspend(info, 1);
+
+#ifdef CONFIG_EOF_FC_WORKAROUND
+	atomic_set(&displayon, 0);
+	if (atomic_read(&ddr_fc_trigger)) {
+		if (cpu_is_pxa988_z3() || cpu_is_pxa986_z3())
+			wakeup_ddr_fc_seq();
+	}
+#endif
+	pxa168fb_disable(fbi);
+	if (!has_feat_video_replace_graphics_dma()) {
+		/* release D1P LPM constraint */
+		pm_qos_update_request(&fbi->qos_idle,
+				PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
+	}
+
+	mutex_unlock(&fbi->output_lock);
+	pr_info("pxa168fb.%d suspend -\n", fbi->id);
+	return 0;
+}
+
+static int _pxa168fb_resume(struct pxa168fb_info *fbi)
+{
+	struct fb_info *info = fbi->fb_info;
+	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	u32 x;
+
+	mutex_lock(&fbi->output_lock);
+
+	pr_info("pxa168fb.%d resume +\n", fbi->id);
+	pxa168fb_enable(fbi);
 
 	/* notify others */
 	fb_set_suspend(info, 0);
+	msleep(80);
 
-	pr_debug("pxa168fb.%d resumed.\n", fbi->id);
+	fbi->output_on = true;
+#ifdef LCD_ESD_RECOVERY
+	if (!fbi->skip_pw_on && esd_irq) {
+#ifdef LCD_ESD_INTERRUPT
+		pr_info("%s, enable esd_irq : %d\n", __func__, esd_irq);
+		enable_irq(esd_irq);
+		irq_set_irq_type(esd_irq, IRQF_TRIGGER_RISING);
+#else
+		schedule_delayed_work(&esd_dwork,
+				msecs_to_jiffies(LCD_ESD_INTERVAL));
+#endif
+	}
+#endif
+	mutex_unlock(&fbi->output_lock);
+	pr_info("pxa168fb.%d resume -\n", fbi->id);
 	return 0;
 }
 
@@ -1694,10 +1889,10 @@ static int pxa168fb_runtime_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pxa168fb_info *fbi = platform_get_drvdata(pdev);
+	int ret;
 
-	if (0 == fbi->id)
-		android_stop_drawing();
-	return _pxa168fb_suspend(fbi);
+	ret = _pxa168fb_suspend(fbi);
+	return ret;
 }
 
 static int pxa168fb_runtime_resume(struct device *dev)
@@ -1707,8 +1902,6 @@ static int pxa168fb_runtime_resume(struct device *dev)
 	int ret;
 
 	ret = _pxa168fb_resume(fbi);
-	if (0 == fbi->id)
-		android_start_drawing();
 	return ret;
 }
 #endif /* CONFIG_PM_RUNTIME */
@@ -1718,35 +1911,7 @@ static void vsync_notify_work(struct work_struct *data)
 	struct pxa168fb_info *fbi;
 
 	fbi = container_of(data, struct pxa168fb_info, vsync_work);
-	if (!fbi) {
-		dev_err(fbi->dev, "failed to get fb info\n");
-		return;
-	}
 	sysfs_notify(&fbi->dev->kobj, NULL, "vsync_ts");
-}
-
-static void panic_work(struct work_struct *data)
-{
-	struct pxa168fb_info *fbi;
-	u32 addr, i;
-
-	fbi = container_of(data, struct pxa168fb_info, panic_work.work);
-	if (!fbi) {
-		dev_err(fbi->dev, "failed to get fb info\n");
-		return;
-	}
-	addr = (u32)fbi->reg_base;
-
-	printk("irq_lcd_count retry times %s ######: %d ######\n", __func__, irq_lcd_count);
-	printk("%s, LCD clock: 0x%x\n", __func__, readl(APMU_LCD));
-	pr_info("\n Dump display controller regs\n");
-	for (i = 0; i < 0x300; i += 4) {
-		if (!(i % 16))
-			printk("\n0x%3x: ", i);
-		printk(" %8x", readl(addr + i));
-	}
-	pr_info("\n");
-	panic("======LCD IRQ control BUG ====\n");
 }
 
 static size_t vsync_help(char *buf)
@@ -1787,34 +1952,28 @@ static ssize_t vsync_store(
 		struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t size)
 {
-    	u32 temp = 0;
 	struct pxa168fb_info *fbi = dev_get_drvdata(dev);
+	char *endp;
 
 	if (sysfs_streq(buf, "u1")) {
 		fbi->vsync_en = 1;
 		irq_unmask_eof(fbi->id);
-               	temp = readl(fbi->reg_base + SPU_IRQ_ENA);
-               	if(!(temp & display_done_imask(fbi->id)))
-                	printk("LCD IRQ u1 ERROR: %s, isr_en: 0x%x, irq en count %d\n",
-                        	 __func__, temp, atomic_read(&fbi->irq_en_count) );
-		
 	} else if (sysfs_streq(buf, "u0")) {
 		fbi->vsync_en = 0;
 		irq_mask_eof(fbi->id);
-	} else if (sscanf(buf, "%d", &fbi->wait_vsync) != 1)
+	} else if (simple_strtoul(buf, &endp, 0) != 1)
 		pr_err("%s %d erro input of wait vsync flag\n",\
 			__func__, __LINE__);
 
 	dev_dbg(fbi->dev, "fbi->vsync_en = %d, fbi->wait_vsync = %d\n",
 			fbi->vsync_en, fbi->wait_vsync);
-
 	return size;
-
 }
 static DEVICE_ATTR(vsync, S_IRUGO | S_IWUSR, vsync_show, vsync_store);
 
 /* Get time stamp of vsync */
-static ssize_t vsync_ts_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t vsync_ts_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
 {
 	struct pxa168fb_info *fbi = dev_get_drvdata(dev);
 
@@ -1823,7 +1982,6 @@ static ssize_t vsync_ts_show(struct device *dev, struct device_attribute *attr, 
 
 	return sprintf(buf, "%llx\n", fbi->vsync_ts_nano);
 }
-
 static DEVICE_ATTR(vsync_ts, S_IRUGO, vsync_ts_show, NULL);
 
 static ssize_t itc_help(char *buf)
@@ -1901,7 +2059,10 @@ static ssize_t itc_show(struct device *dev, struct device_attribute *attr,
 static ssize_t itc_store(struct device *dev, struct device_attribute *attr,
 		const char *buf, size_t size)
 {
-	sscanf(buf, "%d", &irqtm_check);
+	char *endp;
+
+	irqtm_check = simple_strtoul(buf, &endp, 0);
+//	sscanf(buf, "%d", &irqtm_check);
 
 	if (irqtm_check && !ITC_INTERVAL)
 		vsync_check_count();
@@ -1910,119 +2071,99 @@ static ssize_t itc_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR(itc, S_IRUGO | S_IWUSR, itc_show, itc_store);
 
-void pxa168fb_update_modes(struct pxa168fb_info *fbi ,unsigned int index,unsigned int panel)
+#if defined(LCD_ESD_RECOVERY)
+static void esd_dwork_func(struct work_struct *work)
 {
-	struct fb_info *info = fbi->fb_info;
-	struct fb_var_screeninfo *var = &(fbi->fb_info->var);
-	struct pxa168fb_mach_info *mi = fbi->dev->platform_data;
+	struct pxa168fb_info *fbi = fbi_global;
+	int gpio = GPIO_ESD_DET;
 
-	if (panel == 0) /*CPT*/ {
+	mutex_lock(&fbi->output_lock);
 
-		switch(index) {
+	if (!fbi->active)
+		goto out;
 
-		case 0: /*48.19M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 125;
-			mi->modes->right_margin = 150;
-			mi->modes->vsync_len  =  3;
-			mi->modes->upper_margin  =  28;
-			mi->modes->lower_margin  =  28;
-			break;
+	if (gpio_get_value(gpio))
+		pxa168fb_reinit(fbi);
 
-		case 1:	/*50.98M*/
-			mi->modes->hsync_len  =  23;
-			mi->modes->left_margin = 130;
-			mi->modes->right_margin = 188;
-			mi->modes->vsync_len  =  3;
-			mi->modes->upper_margin  =  15;
-			mi->modes->lower_margin  =  15;
-			break;
-
-		case 2: /*50.18M*/
-			mi->modes->hsync_len  =  18;
-			mi->modes->left_margin = 130;
-			mi->modes->right_margin = 192;
-			mi->modes->vsync_len  =  3;
-			mi->modes->upper_margin  =  16;
-			mi->modes->lower_margin  =  16;
-			break;
-
-		case 3: /*54.00M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 156;
-			mi->modes->right_margin = 150;
-			mi->modes->vsync_len  =  3;
-			mi->modes->upper_margin  =  20;
-			mi->modes->lower_margin  =  20;
-
-		default:
-
-			break;
-		}
-	} else if (panel == 2 || panel == 4) /*BOE / SDCVE */ {
-		/*VE_GROUP*/
-		switch(index) {
-
-		case 0: /*48.19M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 142;
-			mi->modes->right_margin = 185;
-			mi->modes->vsync_len  =  4;
-			mi->modes->upper_margin  =  7;
-			mi->modes->lower_margin  =  7;
-			break;
-
-		case 1:	/*50.98M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 142;
-			mi->modes->right_margin = 185;
-			mi->modes->vsync_len  =  4;
-			mi->modes->upper_margin  =  7;
-			mi->modes->lower_margin  =  7;
-			break;
-
-		case 2: /*50.18M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 142;
-			mi->modes->right_margin = 185;
-			mi->modes->vsync_len  =  4;
-			mi->modes->upper_margin  =  7;
-			mi->modes->lower_margin  =  7;
-			break;
-
-		case 3: /*54.00M*/
-			mi->modes->hsync_len  =  16;
-			mi->modes->left_margin = 142;
-			mi->modes->right_margin = 185;
-			mi->modes->vsync_len  =  4;
-			mi->modes->upper_margin  =  7;
-			mi->modes->lower_margin  =  7;
-			break;
-		default:
-
-			break;
-		}
-	} else {
-			mi->modes->hsync_len  =  20;
-			mi->modes->left_margin = 150;
-			mi->modes->right_margin = 150;
-			mi->modes->vsync_len  =  3;
-			mi->modes->upper_margin  =  15;
-			mi->modes->lower_margin  =  15;
-	}
-
-	set_mode(fbi, var, mi->modes, mi->pix_fmt, mi->mmap);
-
-	fb_videomode_to_modelist(mi->modes, mi->num_modes, &info->modelist);
-
-	/* init video mode data */
-	pxa168fb_init_mode(info, mi);
-
-	pxa168fb_set_par(info);
-
+	schedule_delayed_work(&esd_dwork,
+			msecs_to_jiffies(LCD_ESD_INTERVAL));
+out:
+	mutex_unlock(&fbi->output_lock);
 }
 
-extern void sec_getlog_supply_fbinfo(struct fb_info *fb);
+static void esd_work_func(struct work_struct *work)
+{
+	struct pxa168fb_info *fbi = fbi_global;
+	int gpio = GPIO_ESD_DET;
+	int retry = 3;
+
+	mutex_lock(&fbi->output_lock);
+	pr_info("%s, gpio[%d] = %s\n", __func__,
+			gpio, gpio_get_value(gpio) ? "high" : "low");
+	while(retry--) {
+		if (fbi->active) {
+			pxa168fb_reinit(fbi);
+			pr_info("%s, esd recovery done\n", __func__);
+		}
+		if (!gpio_get_value(gpio)) {
+			pr_info("%s, succeeded to recover lcd\n", __func__); 
+			break;
+		} else {
+			pr_info("%s, failed to recover lcd\n", __func__); 
+			continue;
+		}
+	}
+
+	enable_irq(esd_irq);
+	irq_set_irq_type(esd_irq, IRQF_TRIGGER_RISING);
+	mutex_unlock(&fbi->output_lock);
+
+	return;
+}
+
+static irqreturn_t esd_irq_handler(int irq, void *dev_id)
+{
+	irq_set_irq_type(esd_irq, IRQF_TRIGGER_NONE);
+	disable_irq_nosync(esd_irq);
+	queue_work(esd_wq, &esd_work);
+	pr_info("%s, esd detected\n", __func__);
+
+	return IRQ_HANDLED;
+}
+
+static int esd_det_enable(int gpio)
+{
+	esd_irq = gpio_to_irq(gpio);
+
+	if (gpio_request(gpio, "LCD_ESD_INT GPIO")) {
+		printk(KERN_ERR "Failed to request GPIO %d "
+				"for LCD_ESD_INT\n", gpio);
+		return;
+	}
+	gpio_direction_input(gpio);
+	gpio_free(gpio);
+
+#ifdef LCD_ESD_INTERRUPT
+	if (request_irq(esd_irq, esd_irq_handler,
+				IRQF_TRIGGER_RISING,
+				"LCD_ESD_DETECT", NULL)) {
+		pr_err("%s, request_irq failed for esd\n", __func__);
+		return -1;
+	}
+
+	if (!(esd_wq = create_singlethread_workqueue("lcd_esd_det"))) {
+		pr_err("%s, fail to create workqueue!!\n", __func__);
+		return -1;
+	}
+	INIT_WORK(&esd_work, esd_work_func);
+#else
+	INIT_DELAYED_WORK(&esd_dwork, esd_dwork_func); // ESD self protect    
+	schedule_delayed_work(&esd_dwork,
+			msecs_to_jiffies(20000));
+#endif
+	return 0;
+}
+#endif	/* LCD_ESD_RECOVERY */
 
 static int __devinit pxa168fb_probe(struct platform_device *pdev)
 {
@@ -2030,16 +2171,17 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	struct fb_info *info = 0;
 	struct pxa168fb_info *fbi = 0;
 	struct resource *res;
-	struct clk *clk;
+	struct clk *clk = NULL;
+	struct clk *path_clk = NULL, *phy_clk = NULL;
 	int irq, irq_mask, irq_enable_value, ret = 0;
 	struct dsi_info *di = NULL;
 	struct pxa168fb_vdma_info *lcd_vdma = 0;
+	struct pxa168fb_mipi_lcd_driver *lcd_driver;
 
-	if(1 == skip_power_on) //clk div has set in uboot,so skip		
+	if(1 == skip_power_on) //clk div has set in uboot,so skip
 		init_once = 1;
 	else
-		init_once = 0;
-	printk("pxa168fb_probe ...\n");	
+	init_once = 0;
 	mi = pdev->dev.platform_data;
 	if (mi == NULL) {
 		dev_err(&pdev->dev, "no platform data defined\n");
@@ -2052,10 +2194,29 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 		mi->isr_clear_mask = 0xffffffff;
 	}
 
-	clk = clk_get(NULL, "LCDCLK");
-	if (IS_ERR(clk)) {
-		dev_err(&pdev->dev, "unable to get LCDCLK");
-		return PTR_ERR(clk);
+	if (mi->no_legacy_clk) {
+		if (mi->path_clk_name) {
+			path_clk = clk_get(NULL, mi->path_clk_name);
+			if (IS_ERR(path_clk)) {
+				dev_err(&pdev->dev, "unable to get clk %s\n",
+					mi->path_clk_name);
+				return PTR_ERR(path_clk);
+			}
+		}
+		if (mi->phy_clk_name) {
+			phy_clk = clk_get(NULL, mi->phy_clk_name);
+			if (IS_ERR(phy_clk)) {
+				dev_err(&pdev->dev, "unable to get clk %s\n",
+					mi->phy_clk_name);
+				return PTR_ERR(phy_clk);
+			}
+		}
+	} else {
+		clk = clk_get(NULL, "LCDCLK");
+		if (IS_ERR(clk)) {
+			dev_err(&pdev->dev, "unable to get LCDCLK");
+			return PTR_ERR(clk);
+		}
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -2082,7 +2243,7 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	fbi = info->par;
 	fbi->id = pdev->id;
 
-	if (cpu_pxa98x_stepping() < PXA98X_Z3){
+	if (has_feat_video_replace_graphics_dma()) {
 		if (!fbi->id)
 			fbi->vid = 1;
 		else
@@ -2112,10 +2273,13 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	fbi->fb_info = info;
 	platform_set_drvdata(pdev, fbi);
 	fbi->clk = clk;
+	fbi->path_clk = path_clk;
+	fbi->phy_clk = phy_clk;
 	fbi->dev = &pdev->dev;
 	fbi->fb_info->dev = &pdev->dev;
 	fbi->is_blanked = 0;
 	fbi->active = mi->active;
+	lcd_driver = mi->lcd_driver;
 
 	/* Initialize boot setting */
 	fbi->dft_vmode.xres = mi->modes->xres;
@@ -2123,7 +2287,11 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	fbi->dft_vmode.refresh = mi->modes->refresh;
 
 	init_waitqueue_head(&fbi->w_intr_wq);
+	init_waitqueue_head(&fbi->w_intr_wq1);
 	mutex_init(&fbi->access_ok);
+	mutex_init(&fbi->output_lock);
+	spin_lock_init(&fbi->var_lock);
+	spin_lock_init(&fbi->job_lock);
 
 	pxa168fb_list_init(fbi);
 
@@ -2168,9 +2336,6 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	if (mi->mmap)
 		fbi->fb_size = max_fb_size;
 
-	if (max_fb_size > DEFAULT_FB_SIZE)
-		pr_err("%s : max_fb_size %d is larger than reserved FB size!\n", __func__, max_fb_size);
-
 	if (fb_share && (fbi->id == 1) && gfx_info.fbi[0] &&\
 			gfx_info.fbi[0]->fb_start) {
 		fbi->fb_size = gfx_info.fbi[0]->fb_size;
@@ -2179,30 +2344,26 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "--share--FB DMA buffer phy addr : %x\n",
 			(unsigned int)fbi->fb_start_dma);
 	} else if (mi->mmap) {
-		if (skip_power_on) { 
+		if (skip_power_on) {
 			fbi->skip_pw_on = 1;
 			if (!fbi->fb_start || !fbi->fb_start_dma) {
 				fbi->fb_start = ioremap_wc(disp_start_addr, max_fb_size);
 				fbi->fb_start_dma = disp_start_addr;
 			}
 		} else {
-			fbi->fb_start = pxa168fb_alloc_framebuffer(fbi->fb_size,
+		fbi->fb_start = pxa168fb_alloc_framebuffer(fbi->fb_size,
 				&fbi->fb_start_dma);
-			if (fbi->fb_start == NULL) {
-				dev_err(&pdev->dev, "no enough memory!\n");
-				ret = -ENOMEM;
-				goto failed_free_info;
-			}
-			dev_info(&pdev->dev, "---------FB DMA buffer phy addr : %x\n",
-				(unsigned int)fbi->fb_start_dma);
+		if (fbi->fb_start == NULL) {
+			dev_err(&pdev->dev, "no enough memory!\n");
+			ret = -ENOMEM;
+			goto failed_free_info;
+		}
+		dev_info(&pdev->dev, "---------FB DMA buffer phy addr : %x\n",
+			(unsigned int)fbi->fb_start_dma);
 			memset(fbi->fb_start, 0x0, fbi->fb_size);
-			/*memcpy(fbi->fb_start, __phys_to_virt(disp_start_addr), fbi->fb_size);*/
 		}
 	}
-	
 #ifdef VSYNC_DSI_CMD
-	//fbi->vsync_detected = 0;
-	//init_waitqueue_head(&fbi->vsync_detect_wq);
 	mutex_init(&fbi->cmd_mutex);
 	mutex_init(&fbi->vsync_mutex);
 #endif
@@ -2221,11 +2382,36 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	pxa168fb_init_mode(info, mi);
 
 	/* enable controller clock */
-	if (mi->sclk_src)
+	if (!mi->no_legacy_clk && mi->sclk_src)
 		clk_set_rate(fbi->clk, mi->sclk_src);
+
+	if (lcd_driver)
+		lcd_driver->probe(fbi);
 
 	/* enable power supply */
 	fbi->active = 0;
+
+#ifdef INIT_CHANGE
+	fbi->qos_idle.name = pdev->name;
+	pm_qos_add_request(&fbi->qos_idle, PM_QOS_CPUIDLE_BLOCK,
+			PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
+
+	fbi->workqueue = alloc_workqueue(pdev->name, WQ_HIGHPRI | WQ_UNBOUND |
+							WQ_MEM_RECLAIM, 1);
+	if (!fbi->workqueue) {
+		dev_err(&pdev->dev, "alloc_workqueue failed\n");
+		goto failed_free_cmap;
+	}
+
+	INIT_WORK(&fbi->vsync_work, vsync_notify_work);
+#endif
+#ifdef LCD_ESD_RECOVERY
+	if (get_panel_id()) {
+		fbi_global = fbi;
+		if (esd_det_enable(GPIO_ESD_DET))
+			pr_err("%s, Failed to enable esd interrupt\n", __func__);
+	}
+#endif
 	pm_runtime_enable(&pdev->dev);
 	ret = pm_runtime_get_sync(&pdev->dev);
 	if (ret < 0)
@@ -2272,15 +2458,13 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 			goto failed_free_cmap;
 		}
 	}
-	
+
 	/* disable GFX interrupt enable err interrupt */
 	irq_mask = path_imasks(fbi->id) | err_imask(fbi->id);
 	irq_enable_value = err_imask(fbi->id);
-	if (!cpu_is_pxa988() && !cpu_is_pxa986()){
+	if (!cpu_is_pxa988() && !cpu_is_pxa986())
 		irq_enable_value |= display_done_imask(fbi->id);
-	}
 	irq_mask_set(fbi->id, irq_mask, irq_enable_value);
-
 	fbi->wait_vsync = 1;
 
 	pm_runtime_put_sync(&pdev->dev);
@@ -2295,13 +2479,8 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	pr_info("pxa168fb: frame buffer device was loaded"
 		" to /dev/fb%d <%s>.\n", info->node, info->fix.id);
 
-	if(mi->mmap < 3)
-		atomic_set(&fbi->vsync_cnt, 1);
-	else
-		atomic_set(&fbi->vsync_cnt, 2);
+	atomic_set(&fbi->vsync_cnt, 2);
 
-	sec_getlog_supply_fbinfo(fbi->fb_info);
-	
 #ifdef CONFIG_PXA688_PHY
 	ret = device_create_file(&pdev->dev, &dev_attr_phy);
 	if (ret < 0) {
@@ -2326,10 +2505,24 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 	}
 #endif
 
-#ifdef CONFIG_PM_RUNTIME
-	ret = sysfs_create_group(&pdev->dev.kobj, &pxa_android_power_sysfs_files);
+#ifdef CONFIG_LCD_MDNIE_ENABLE
+	ret = device_create_file(&pdev->dev, &dev_attr_tuning);
+        if (ret < 0) {
+                dev_err(&pdev->dev, "device attr create fail: %d\n", ret);
+                goto failed_free_cmap;
+        }
+
+	ret = device_create_file(&pdev->dev, &dev_attr_scenario);
+        if (ret < 0) {
+                dev_err(&pdev->dev, "device attr create fail: %d\n", ret);
+                goto failed_free_cmap;
+        }
+#endif
+
+#ifdef CONFIG_DISP_DFC
+	ret = device_create_file(&pdev->dev, &dev_attr_freq);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "dev attr android power create fail: %d\n", ret);
+		dev_err(&pdev->dev, "device attr freq create fail: %d\n", ret);
 		goto failed_free_cmap;
 	}
 #endif
@@ -2352,12 +2545,6 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 		goto failed_free_cmap;
 	}
 
-	ret = device_create_file(&pdev->dev, &dev_attr_lvds_clk_switch);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "device attr create fail: %d\n", ret);
-		goto failed_free_cmap;
-	}
-
 	if (!fbi->id) {
 		ret = device_create_file(&pdev->dev, &dev_attr_itc);
 		if (ret < 0) {
@@ -2367,13 +2554,24 @@ static int __devinit pxa168fb_probe(struct platform_device *pdev)
 		}
 	}
 
+#ifndef INIT_CHANGE
 	fbi->qos_idle.name = pdev->name;
 	pm_qos_add_request(&fbi->qos_idle, PM_QOS_CPUIDLE_BLOCK,
 			PM_QOS_CPUIDLE_BLOCK_DEFAULT_VALUE);
 
-	INIT_WORK(&fbi->vsync_work, vsync_notify_work);
-	INIT_DELAYED_WORK(&fbi->panic_work, panic_work);
+	fbi->workqueue = alloc_workqueue(pdev->name, WQ_HIGHPRI | WQ_UNBOUND |
+							WQ_MEM_RECLAIM, 1);
+	if (!fbi->workqueue) {
+		dev_err(&pdev->dev, "alloc_workqueue failed\n");
+		goto failed_free_cmap;
+	}
 
+	INIT_WORK(&fbi->vsync_work, vsync_notify_work);
+#endif
+
+#ifdef CONFIG_KERNEL_DEBUG_SEC
+	sec_getlog_supply_fbinfo(fbi->fb_info);
+#endif
 
 #ifdef CONFIG_ANDROID
 	if (fbi->fb_start && (!fbi->id || !fb_share) && !fbi->skip_pw_on) {
@@ -2395,18 +2593,40 @@ failed_free_cmap:
 	fb_dealloc_cmap(&info->cmap);
 failed_free_clk:
 	pxa168fb_free_framebuffer(fbi->fb_size, fbi->fb_start,
-		&fbi->fb_start_dma);
+			&fbi->fb_start_dma);
 failed_free_info:
 	platform_set_drvdata(pdev, NULL);
-	gfx_info.fbi[fbi->id] = NULL;
 	if (fbi)
+	{
+		gfx_info.fbi[fbi->id] = NULL;
 		kfree(fbi);
+	}
 	kfree(info);
 failed_put_clk:
 	pm_qos_remove_request(&fbi->qos_idle);
-	clk_put(clk);
+	if (clk)
+		clk_put(clk);
+	if (path_clk)
+		clk_put(path_clk);
+	if (phy_clk)
+		clk_put(phy_clk);
+
 	dev_err(&pdev->dev, "frame buffer device init failed with %d\n", ret);
 	return ret;
+}
+
+static void pxa168fb_shutdown(struct platform_device *pdev)
+{
+	struct pxa168fb_info *fbi = platform_get_drvdata(pdev);
+
+	printk("%s +\n", __func__);
+	if (!fbi)
+		return 0;
+
+	_pxa168fb_suspend(fbi);
+
+	printk("%s -\n", __func__);
+	return;
 }
 
 static int __devexit pxa168fb_remove(struct platform_device *pdev)
@@ -2441,28 +2661,20 @@ static int __devexit pxa168fb_remove(struct platform_device *pdev)
 	irq = platform_get_irq(pdev, 0);
 
 	pxa168fb_free_framebuffer(fbi->fb_size, fbi->fb_start,
-		&fbi->fb_start_dma);
-	
+			&fbi->fb_start_dma);
+
 	pm_qos_remove_request(&fbi->qos_idle);
-	clk_put(fbi->clk);
+
+	if (fbi->clk)
+		clk_put(fbi->clk);
+	if (fbi->path_clk)
+		clk_put(fbi->path_clk);
+	if (fbi->phy_clk)
+		clk_put(fbi->phy_clk);
 
 	framebuffer_release(info);
 
 	return 0;
-}
-
-static void pxa168fb_shutdown(struct platform_device *pdev)
-{
-
-#if defined(CONFIG_MACH_LT02)
-	struct pxa168fb_info *fbi = platform_get_drvdata(pdev);
-	struct pxa168fb_mach_info *mi = pdev->dev.platform_data;
-
-	if ((mi->pxa168fb_lcd_power))
-		mi->pxa168fb_lcd_power(fbi, mi->spi_gpio_cs,
-					mi->spi_gpio_reset, 0);
-#endif
-
 }
 
 static const struct dev_pm_ops pxa168fb_pm_ops = {
@@ -2477,8 +2689,8 @@ static struct platform_driver pxa168fb_driver = {
 		.pm	= &pxa168fb_pm_ops,
 	},
 	.probe		= pxa168fb_probe,
-	.remove		= __devexit_p(pxa168fb_remove),
 	.shutdown	= pxa168fb_shutdown,
+	.remove		= __devexit_p(pxa168fb_remove),
 };
 
 module_platform_driver(pxa168fb_driver);

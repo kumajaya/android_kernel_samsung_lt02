@@ -15,7 +15,7 @@
 #define DBG_ERR_IRQ	((debug_flag & DBG_ERR_MASK) >> DBG_ERR_SHIFT)
 #define DBG_IRQ_PATH	(debug_flag & DBG_VSYNC_MASK)
 
-#ifdef CONFIG_CPU_PXA988
+#if defined(CONFIG_CPU_PXA988)
 #define NEED_VSYNC(fbi)	(fbi->wait_vsync)
 #else
 #define NEED_VSYNC(fbi)	(fbi->wait_vsync && dispd_dma_enabled(fbi))
@@ -41,13 +41,12 @@ extern struct fbi_info ovly_info;
 extern struct device_attribute dev_attr_lcd;
 extern struct device_attribute dev_attr_phy;
 extern struct device_attribute dev_attr_vdma;
-extern struct attribute_group pxa_android_power_sysfs_files;
+extern struct device_attribute dev_attr_freq;
 
 #ifdef CONFIG_LCD_MDNIE_ENABLE
 extern struct device_attribute dev_attr_tuning;
+extern struct device_attribute dev_attr_scenario;
 #endif
-extern struct device_attribute dev_attr_lvds_clk_switch;
-
 extern u32 clk_reg(int id, u32 type);
 extern void vsync_check_count(void);
 extern int unsupport_format(struct pxa168fb_info *fbi,
@@ -91,14 +90,9 @@ extern irqreturn_t mmp_v4l2_isr(int id);
 
 #ifdef CONFIG_EOF_FC_WORKAROUND
 extern atomic_t displayon;
-extern atomic_t fc_trigger;
-extern int wakeup_fc_seq(void);
+extern atomic_t ddr_fc_trigger;
 extern int wakeup_ddr_fc_seq(void);
 #endif
-
-/* power api usage for android early supsend support */
-extern void android_stop_drawing(void);
-extern void android_start_drawing(void);
 
 #ifdef CONFIG_VIDEO_MVISP
 extern void isp_reset_clock(void);

@@ -10,30 +10,6 @@
  * more details.
  */
 
-//#include <linux/module.h>
-//#include <linux/moduleparam.h>
-//#include <linux/kernel.h>
-//#include <linux/sched.h>
-//#include <linux/errno.h>
-//#include <linux/string.h>
-//#include <linux/interrupt.h>
-//#include <linux/slab.h>
-//#include <linux/delay.h>
-//#include <linux/init.h>
-//#include <linux/ioport.h>
-//#include <linux/cpufreq.h>
-//#include <linux/platform_device.h>
-//#include <linux/dma-mapping.h>
-//#include <linux/clk.h>
-//#include <linux/err.h>
-//#include <linux/uaccess.h>
-//#include <linux/console.h>
-//#include <linux/timer.h>
-//#include <linux/io.h>
-
-//#include <asm/irq.h>
-//#include <mach/pxa168fb.h>
-
 #include "pxa168fb_common.h"
 
 /* fb_vsmooth: the path that need to do smoothing. e.g. TV
@@ -49,12 +25,19 @@ static int debug;
 /* graphic layer partial display, color format should be RGB565 */
 int pxa688fb_partdisp_set(struct mvdisp_partdisp grap)
 {
-	struct pxa168fb_info *fbi = gfx_info.fbi[1];
-	struct fb_info *info = fbi->fb_info;
-	struct fb_var_screeninfo *var = &info->var;
+	struct pxa168fb_info *fbi;
+	struct fb_info *info;
+	struct fb_var_screeninfo *var;
 	struct lcd_regs *regs;
 	u32 xres, yres, yres_z, color3_0, color7_4, color11_8, color15_12;
 	u32 base, mask, gfx_fmt, bytespp, shift, offset, threshold, region, tmp;
+
+	if (grap.id < 0 || grap.id >= MAX_FB_INFO)
+		return -EINVAL;
+
+	fbi = gfx_info.fbi[grap.id];
+	info = fbi->fb_info;
+	var = &info->var;
 
 	gfx_fmt = (dma_ctrl_read(grap.id, 0) & (0xf << 16)) >> 16;
 	if (gfx_fmt == PIX_FMT_RGB565 || gfx_fmt == PIX_FMT_RGB1555 >> 1 ||

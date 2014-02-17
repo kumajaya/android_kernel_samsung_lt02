@@ -1697,6 +1697,45 @@ int get_gcu_freqs_table(unsigned long *gcu_freqs_table,
 }
 EXPORT_SYMBOL(get_gcu_freqs_table);
 
+/* rate unit is Mhz */
+void dynamic_change_pll3(unsigned int rate)
+{
+	struct clk *pll3, *pll3_vco;
+	unsigned long i, pll3_rate, pll3vco_rate;
+
+	pll3 = clk_get(NULL, "pll3");
+	pll3_vco = clk_get(NULL, "pll3_vco");
+
+	if (!rate) {
+		if (clk_get_rate(pll3_vco) == pll3_vco_default &&
+			(clk_get_rate(pll3) == pll3_default)) {
+			return;
+		}
+		pll3vco_rate = 	pll3_vco_default;
+		pll3_rate = pll3_default;
+	} else {
+		for (i = 0; i < ARRAY_SIZE(pll_post_div_tbl); i++) {
+			pll3_rate = rate * pll_post_div_tbl[i].div;
+			if ((pll3_rate > 600) &&
+					(pll3_rate < 1000))
+				break;
+		}
+
+		if (i == ARRAY_SIZE(pll_post_div_tbl))
+			BUG_ON("Multiplier is out of range\n");
+		pll3_rate *=  MHZ;
+		pll3vco_rate = pll3_rate * 2;
+	}
+
+	clk_set_rate(pll3_vco, pll3vco_rate);
+	clk_set_rate(pll3, pll3_rate);
+	udelay(50);
+	pr_info("%s: pll3_vco is %luMHz, pll3 is %luMHz", __func__,
+		 clk_get_rate(pll3_vco) / MHZ,
+		 clk_get_rate(pll3) / MHZ);
+}
+EXPORT_SYMBOL(dynamic_change_pll3);
+
 /* used for GC LPM constraint */
 static struct pm_qos_request gc_lpm_cons;
 

@@ -104,7 +104,6 @@ obj-$(CONFIG_FB_GBE)              += gbefb.o
 obj-$(CONFIG_FB_CIRRUS)		  += cirrusfb.o
 obj-$(CONFIG_FB_ASILIANT)	  += asiliantfb.o
 obj-$(CONFIG_FB_PXA)		  += pxafb.o
-obj-$(CONFIG_PM_RUNTIME)	  += mmp_fb_power.o
 obj-$(CONFIG_FB_PXA168)		  += pxa168fb.o pxa168fb_common.o \
 					 pxa168fb_ovly.o
 obj-$(CONFIG_PXA688_PHY)	  += pxa688_phy.o
