@@ -327,6 +327,7 @@ static int ddr_fc_failure = 0;
 static struct pxa988_ddr_axi_opt *md_new_eof, *md_old_eof;
 DECLARE_COMPLETION(ddr_eof_complete);
 atomic_t ddr_fc_trigger = ATOMIC_INIT(0);
+atomic_t disable_c2 = ATOMIC_INIT(0);
 extern atomic_t displayon;
 #endif
 

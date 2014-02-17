@@ -41,6 +41,7 @@ struct devfreq_dev_status {
 	unsigned long total_time;
 	unsigned long busy_time;
 	unsigned long current_frequency;
+	int throughput;
 	void *private_data;
 };
 
@@ -204,8 +205,10 @@ struct devfreq {
 
 	unsigned long min_freq;
 	unsigned long max_freq;
-	struct notifier_block qos_nb;
+	struct notifier_block qos_min_nb;
+	struct notifier_block qos_max_nb;
 	unsigned long qos_min_freq;
+	unsigned long qos_max_freq;
 	bool qos_use_max;
 };
 
@@ -253,6 +256,22 @@ extern const struct devfreq_governor devfreq_simple_ondemand;
 struct devfreq_simple_ondemand_data {
 	unsigned int upthreshold;
 	unsigned int downdifferential;
+};
+#endif
+
+#ifdef CONFIG_DEVFREQ_GOV_THROUGHPUT
+extern const struct devfreq_governor devfreq_throughput;
+
+struct throughput_threshold {
+	unsigned int up;
+	unsigned int down;
+};
+struct devfreq_throughput_data {
+	unsigned int upthreshold;
+	unsigned int downdifferential;
+	u32 table_len;
+	u32 *freq_table;	/* unit Khz */
+	struct throughput_threshold *throughput_table;
 };
 #endif
 

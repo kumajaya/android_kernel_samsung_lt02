@@ -260,9 +260,9 @@ TRACE_EVENT(pxa_core_hotplug,
 );
 
 TRACE_EVENT(pxa_ddr_workload,
-	TP_PROTO(u32 workload, u32 freq),
+	TP_PROTO(u32 workload, u32 freq, s32 throughput),
 
-	TP_ARGS(workload, freq),
+	TP_ARGS(workload, freq, throughput),
 
 	TP_STRUCT__entry(
 		__field(u32, workload)
@@ -275,6 +275,22 @@ TRACE_EVENT(pxa_ddr_workload,
 	),
 
 	TP_printk("workload: %u freq: %u", __entry->workload, __entry->freq)
+);
+
+TRACE_EVENT(pxa_ddr_upthreshold,
+	TP_PROTO(u32 upthreshold),
+
+	TP_ARGS(upthreshold),
+
+	TP_STRUCT__entry(
+		__field(u32, upthreshold)
+	),
+
+	TP_fast_assign(
+		__entry->upthreshold = upthreshold;
+	),
+
+	TP_printk("ddr devfreq upthreshold: %u", __entry->upthreshold)
 );
 
 TRACE_EVENT(pxa_ddr_lpm,

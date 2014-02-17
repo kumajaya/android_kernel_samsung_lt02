@@ -104,23 +104,16 @@ int update_devfreq(struct devfreq *devfreq)
 	 * max_freq (probably called by thermal when it's too hot)
 	 * min_freq
 	 */
+	freq = max(freq, devfreq->qos_min_freq);
+	freq = max(freq, devfreq->min_freq);
+	freq = min(freq, devfreq->qos_max_freq);
+	freq = min(freq, devfreq->max_freq);
 
-	if (devfreq->qos_min_freq && freq < devfreq->qos_min_freq) {
-		freq = (devfreq->qos_min_freq > devfreq->min_freq) ?\
-			   devfreq->qos_min_freq : devfreq->min_freq;
+	if ((freq == devfreq->qos_max_freq) || (freq == devfreq->max_freq))
 		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use LUB */
-		goto update;
-	}
-	if (devfreq->min_freq && freq < devfreq->min_freq) {
-		freq = devfreq->min_freq;
+	else
 		flags &= ~DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use GLB */
-	}
-	if (devfreq->max_freq && freq > devfreq->max_freq) {
-		freq = devfreq->max_freq;
-		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use LUB */
-	}
 
-update:
 	err = devfreq->profile->target(devfreq->dev.parent, &freq, flags);
 	if (err)
 		return err;
@@ -152,13 +145,13 @@ static int devfreq_notifier_call(struct notifier_block *nb, unsigned long type,
 }
 
 /**
- * devfreq_qos_notifier_call() - It is called when kernel driver
+ * devfreq_qos_min_notifier_call() - It is called when kernel driver
  * has constraints
  */
-static int devfreq_qos_notifier_call(struct notifier_block *nb,
-				     unsigned long value, void *devp)
+static int devfreq_qos_min_notifier_call(struct notifier_block *nb,
+					unsigned long value, void *devp)
 {
-	struct devfreq *devfreq = container_of(nb, struct devfreq, qos_nb);
+	struct devfreq *devfreq = container_of(nb, struct devfreq, qos_min_nb);
 	int ret;
 	int i;
 	s32 default_value = PM_QOS_DEFAULT_VALUE;
@@ -195,6 +188,47 @@ update:
 	return ret;
 }
 
+/**
+ * devfreq_qos_max_notifier_call() - It is called when kernel driver
+ * has constraints
+ */
+static int devfreq_qos_max_notifier_call(struct notifier_block *nb,
+					unsigned long value, void *devp)
+{
+	struct devfreq *devfreq = container_of(nb, struct devfreq, qos_max_nb);
+	int ret;
+	int i;
+	s32 default_value = PM_QOS_DEFAULT_VALUE;
+	struct devfreq_pm_qos_table *qos_list = devfreq->profile->qos_list;
+
+	if (!qos_list)
+		return NOTIFY_DONE;
+
+	mutex_lock(&devfreq->lock);
+
+	if (value == default_value) {
+		devfreq->qos_max_freq = INT_MAX;
+	goto update;
+	}
+	devfreq->qos_max_freq = qos_list[0].freq;
+	for (i = 1; qos_list[i - 1].freq; i++) {
+		if (!qos_list[i].freq) {
+			devfreq->qos_max_freq = qos_list[i - 1].freq;
+			goto update;
+		}
+		if ((qos_list[i - 1].qos_value <= value) &&
+		    (qos_list[i].qos_value > value)) {
+			devfreq->qos_max_freq = qos_list[i - 1].freq;
+			goto update;
+		}
+	}
+
+update:
+	ret = update_devfreq(devfreq);
+	mutex_unlock(&devfreq->lock);
+
+	return ret;
+}
 
 /**
  * _remove_devfreq() - Remove devfreq from the device.
@@ -443,7 +477,8 @@ struct devfreq *devfreq_add_device(struct device *dev,
 	devfreq->next_polling = devfreq->polling_jiffies
 			      = msecs_to_jiffies(devfreq->profile->polling_ms);
 	devfreq->nb.notifier_call = devfreq_notifier_call;
-	devfreq->qos_nb.notifier_call = devfreq_qos_notifier_call;
+	devfreq->qos_min_nb.notifier_call = devfreq_qos_min_notifier_call;
+	devfreq->qos_max_nb.notifier_call = devfreq_qos_max_notifier_call;
 
 	/* Check the sanity of qos_list/qos_type */
 	if (profile->qos_type || profile->qos_list) {
@@ -511,7 +546,10 @@ struct devfreq *devfreq_add_device(struct device *dev,
 			}
 		}
 
-		pm_qos_add_notifier(profile->qos_type, &devfreq->qos_nb);
+		pm_qos_add_notifier(PM_QOS_DDR_DEVFREQ_MIN,
+				    &devfreq->qos_min_nb);
+		pm_qos_add_notifier(PM_QOS_DDR_DEVFREQ_MAX,
+				    &devfreq->qos_max_nb);
 	}
 
 	dev_set_name(&devfreq->dev, dev_name(dev));
@@ -547,8 +585,12 @@ out:
 err_init:
 	device_unregister(&devfreq->dev);
 err_qos_add:
-	if (profile->qos_type || profile->qos_list)
-		pm_qos_remove_notifier(profile->qos_type, &devfreq->qos_nb);
+	if (profile->qos_type || profile->qos_list) {
+		pm_qos_remove_notifier(PM_QOS_DDR_DEVFREQ_MIN,
+				       &devfreq->qos_min_nb);
+		pm_qos_remove_notifier(PM_QOS_DDR_DEVFREQ_MAX,
+				       &devfreq->qos_max_nb);
+	}
 err_dev:
 	mutex_unlock(&devfreq->lock);
 	kfree(devfreq);
@@ -580,9 +622,12 @@ int devfreq_remove_device(struct devfreq *devfreq)
 
 	mutex_lock(&devfreq->lock);
 
-	if (devfreq->profile->qos_type)
+	if (devfreq->profile->qos_type) {
 		pm_qos_remove_notifier(devfreq->profile->qos_type,
-				  &devfreq->qos_nb);
+				  &devfreq->qos_min_nb);
+		pm_qos_remove_notifier(devfreq->profile->qos_type,
+				  &devfreq->qos_max_nb);
+	}
 
 	_remove_devfreq(devfreq, false); /* it unlocks devfreq->lock */
 
@@ -692,7 +737,6 @@ static ssize_t store_min_freq(struct device *dev, struct device_attribute *attr,
 		ret = -EINVAL;
 		goto unlock;
 	}
-
 	if (df->min_freq == value) {
 		ret = count;
 		goto unlock;
@@ -731,7 +775,6 @@ static ssize_t store_max_freq(struct device *dev, struct device_attribute *attr,
 		ret = -EINVAL;
 		goto unlock;
 	}
-
 	if (df->max_freq == value) {
 		ret = count;
 		goto unlock;

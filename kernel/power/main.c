@@ -16,11 +16,6 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 
-#ifdef CONFIG_CPU_FREQ_LIMIT_USERSPACE
-#include <linux/cpufreq.h>
-#include <linux/cpufreq_limit.h>
-#endif
-
 #include "power.h"
 
 DEFINE_MUTEX(pm_mutex);
@@ -475,57 +470,6 @@ power_attr(wake_unlock);
 #endif /* CONFIG_PM_WAKELOCKS */
 #endif /* CONFIG_PM_SLEEP */
 
-#ifdef CONFIG_CPU_FREQ_LIMIT_USERSPACE
-static ssize_t cpufreq_table_show(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				char *buf)
-{
-	ssize_t count = 0;
-	struct cpufreq_frequency_table *table;
-	struct cpufreq_policy *policy;
-	unsigned int min_freq = ~0;
-	unsigned int max_freq = 0;
-	unsigned int i = 0;
-	unsigned int cpu_idx = 0;
-
-	table = cpufreq_frequency_get_table(0);
-	if (!table) {
-		pr_err("%s: Failed to get the cpufreq table\n", __func__);
-		return sprintf(buf, "Failed to get the cpufreq table\n");
-	}
-
-	policy = cpufreq_cpu_get(0);
-	if (policy) {
-		min_freq = policy->cpuinfo.min_freq;
-		max_freq = policy->cpuinfo.max_freq;
-	}
-
-	while (table[cpu_idx].frequency != CPUFREQ_TABLE_END)
-		cpu_idx++;
-	for (i = cpu_idx-1; (table[i].frequency != CPUFREQ_TABLE_END); i--) {
-		if ((table[i].frequency == CPUFREQ_ENTRY_INVALID) ||
-		    (table[i].frequency > max_freq) ||
-		    (table[i].frequency < min_freq))
-			continue;
-		count += sprintf(&buf[count], "%d ", table[i].frequency);
-		if (i==0) break;
-	}
-	count += sprintf(&buf[count], "\n");
-
-	return count;
-}
-
-static ssize_t cpufreq_table_store(struct kobject *kobj,
-				struct kobj_attribute *attr,
-				const char *buf, size_t n)
-{
-	pr_err("%s: cpufreq_table is read-only\n", __func__);
-	return -EINVAL;
-}
-
-power_attr(cpufreq_table);
-#endif
-
 #ifdef CONFIG_PM_TRACE
 int pm_trace_enabled;
 
@@ -587,9 +531,6 @@ static struct attribute * g[] = {
 #ifdef CONFIG_PM_DEBUG
 	&pm_test_attr.attr,
 #endif
-#endif
-#ifdef CONFIG_CPU_FREQ_LIMIT_USERSPACE
-	&cpufreq_table_attr.attr,
 #endif
 	NULL,
 };

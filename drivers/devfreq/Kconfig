@@ -63,6 +63,16 @@ config DEVFREQ_GOV_USERSPACE
 	  Otherwise, the governor does not change the frequnecy
 	  given at the initialization.
 
+config DEVFREQ_GOV_THROUGHPUT
+        bool "Throughput"
+        help
+	  Set frequency based on recent throughput (e.g. how many MB/s).
+	  A device with throughput governor should provide current throughput
+	  value and available freq table. The throughput governor will choose
+	  a proper frequency according to current throughput. A device may
+	  provide tuned values to the governor with data field at
+	  devfreq_add_device().
+
 comment "DEVFREQ Drivers"
 
 config ARM_EXYNOS4_BUS_DEVFREQ
@@ -88,8 +98,46 @@ config VPU_DEVFREQ
 
 config DDR_DEVFREQ
 	bool "DDR devfreq driver support"
+	help
+	  This adds the mck4 devfreq driver support.
+
+if DDR_DEVFREQ
+choice
+	bool "DDR devfreq default governor"
+	default DDR_DEVFREQ_GOV_THROUGHPUT
+	help
+	  this selects the default governor of DDR devfreq driver
+
+config DDR_DEVFREQ_GOV_THROUGHPUT
+	bool "Throughput"
+	select DEVFREQ_GOV_THROUGHPUT
+	help
+	  Use the DEVFreq governor 'Throughput' as default. This allows
+	  you to get a full dynamic frequency capable system by simply
+	  loading your devfreq low-level hardware driver.
+	  Be aware that not all devfreq drivers support the throughput
+	  governor.
+
+config DDR_DEVFREQ_GOV_ONDEMAND
+	bool "Simple Ondemand"
 	select DEVFREQ_GOV_SIMPLE_ONDEMAND
 	help
-	  This adds the mck4 devfreq driver support for pxa988, mmp3.
+	  Use the DEVFreq governor 'Simple Ondemand' as default. This allows
+	  you to get a full dynamic frequency capable system by simply
+	  loading your devfreq low-level hardware driver.
+	  Be aware that not all devfreq drivers support the simple ondemand
+	  governor.
+
+config DDR_DEVFREQ_GOV_USERSPACE
+	bool "Userspace"
+	select DEVFREQ_GOV_USERSPACE
+	help
+	  Use the DEVFreq governor 'Userspace' as default. This allows
+	  you to set the ddr frequency manually or when a userspace
+	  program shall be able to set the ddr dynamically without having
+	  to enable the userspace governor manually.
+endchoice
+
+endif # DDR_DEVFREQ
 
 endif # PM_DEVFREQ

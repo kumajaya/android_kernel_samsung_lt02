@@ -23,7 +23,8 @@
 #include <linux/string.h>
 #include <plat/devfreq.h>
 #include <mach/dvfs.h>
-
+#include <linux/sched.h>
+#include <linux/reboot.h>
 #include <plat/pxa_trace.h>
 
 #define DDR_FREQ_MAX 8
@@ -36,14 +37,15 @@ struct ddr_devfreq_data {
 	struct devfreq *pdev_ddr;
 	struct clk *ddr_clk;
 	u32 mc_base_pri;/* primary addr */
-	u32 mc_base_sec;/* secondray addr, only valid if interleave_is_on */
-	/* used for platform have more than one DDR controller */
-	u32 interleave_is_on;
 	/* DDR frequency table used for platform */
 	u32 ddr_freq_tbl[DDR_FREQ_MAX];	/* unit Khz */
 	u32 ddr_freq_tbl_len;
 	unsigned long last_polled_at;
 	spinlock_t lock;
+
+	/* used for performance optimization */
+	u32 high_upthrd_swp;
+	u32 high_upthrd;
 
 	/* used for debug interface */
 	atomic_t is_disabled;
@@ -72,15 +74,59 @@ static struct notifier_block notifier_freq_block = {
 	.notifier_call = dvfs_notifier_freq,
 };
 
-/* default using ondemand governor */
-static const struct devfreq_governor *default_gov =
-	&devfreq_simple_ondemand;
+#ifdef CONFIG_DDR_DEVFREQ_GOV_ONDEMAND
+/* notifier to change the devfreq govoner's upthreshold */
+static int upthreshold_freq_notifer_call(struct notifier_block *nb,
+	       unsigned long val, void *data)
+{
+	struct cpufreq_freqs *freq = data;
+	struct devfreq *devfreq = cur_data->pdev_ddr;
+	struct devfreq_simple_ondemand_data *gov_data;
 
-/* default using 70% as upthreshold and 5% as downthreshold */
-static struct devfreq_simple_ondemand_data ddr_ondemand_data = {
+	if (val != CPUFREQ_POSTCHANGE)
+		return NOTIFY_OK;
+
+	mutex_lock(&devfreq->lock);
+	gov_data = devfreq->data;
+	if (freq->new >= cur_data->high_upthrd_swp)
+		gov_data->upthreshold = cur_data->high_upthrd;
+	else
+		gov_data->upthreshold = DDR_DEVFREQ_UPTHRESHOLD;
+	mutex_unlock(&devfreq->lock);
+
+	trace_pxa_ddr_upthreshold(gov_data->upthreshold);
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block upthreshold_freq_notifier = {
+	.notifier_call = upthreshold_freq_notifer_call
+};
+#endif
+
+#ifdef CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT
+/* default using 65% as upthreshold and 5% as downdifferential */
+static struct devfreq_throughput_data devfreq_gov_data = {
 	.upthreshold = DDR_DEVFREQ_UPTHRESHOLD,
 	.downdifferential = DDR_DEVFREQ_DOWNDIFFERENTIAL,
 };
+#define DEVFREQ_GOV_DATA		(&devfreq_gov_data)
+#define DEVFREQ_DEFAULT_GOVERNOR        (&devfreq_throughput)
+
+#elif defined(CONFIG_DDR_DEVFREQ_GOV_ONDEMAND)
+/* default using 65% as upthreshold and 5% as downdifferential */
+static struct devfreq_simple_ondemand_data devfreq_gov_data = {
+	.upthreshold = DDR_DEVFREQ_UPTHRESHOLD,
+	.downdifferential = DDR_DEVFREQ_DOWNDIFFERENTIAL,
+};
+#define DEVFREQ_GOV_DATA		(&devfreq_gov_data)
+#define DEVFREQ_DEFAULT_GOVERNOR        (&devfreq_simple_ondemand)
+
+#elif defined(CONFIG_DDR_DEVFREQ_GOV_USERSPACE)
+#define DEVFREQ_GOV_DATA		(NULL)
+#define DEVFREQ_DEFAULT_GOVERNOR        (&devfreq_userspace)
+
+#endif /* CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT */
 
 #define PERF_CONFIG_REG 0x440
 #define PERF_STATUS_REG 0x444
@@ -239,29 +285,6 @@ static int __init ddr_perf_counter_init(void)
 	return 0;
 }
 
-static inline void get_mc_cnt(u32 mc_base, u32 *total,
-			u32 *idle, struct ddr_devfreq_data *data)
-{
-	unsigned long flags;
-	unsigned int total_ticks, no_util_ticks, rw_ticks;
-
-	spin_lock_irqsave(&data->lock, flags);
-
-	/* stop counters, to keep data synchronized */
-	stop_ddr_performance_counter();
-
-	total_ticks = readl(mc_base + PERF_CNT_0_REG);
-	rw_ticks = readl(mc_base + PERF_CNT_2_REG);
-	no_util_ticks = readl(mc_base + PERF_CNT_3_REG);
-	*total = total_ticks;
-	*idle = total_ticks - rw_ticks * 4;
-
-	start_ddr_performance_counter();
-
-	spin_unlock_irqrestore(&data->lock, flags);
-
-}
-
 static inline void reset_mc_cnt(u32 mc_base,
 			struct ddr_devfreq_data *data)
 {
@@ -287,49 +310,47 @@ static inline u32 cal_workload(unsigned long busy_time,
 }
 
 /*
- * get the mck4 total and idle performance cnt
- * if interleave is on, get the busy one of primary and secondary mc.
- * else get the primary mc only.
+ * get the mck4 total_ticks, data_ticks, speed.
  */
 static void get_ddr_cycles(struct ddr_devfreq_data *data,
-	unsigned long *total, unsigned long *busy)
+	unsigned long *total_ticks, unsigned long *data_ticks, int *speed)
 {
-	u32 total_pri, idle_pri;
-	u32 total_sec, idle_sec;
+	u32 mc_base;
+	unsigned long flags;
+	unsigned int diff_ms;
+	unsigned long long time_stamp_cur;
+	static unsigned long long time_stamp_old;
 
-	get_mc_cnt(data->mc_base_pri, &total_pri, &idle_pri, data);
+	mc_base = data->mc_base_pri;
 
-	if (data->interleave_is_on) {
-		dev_dbg(&data->pdev_ddr->dev, "interleave is on\n");
-		get_mc_cnt(data->mc_base_sec, &total_sec, &idle_sec, data);
-		if (total_sec < total_pri) {
-			*total = total_sec;
-			*busy = total_sec - idle_sec;
-		} else {
-			*total = total_pri;
-			*busy = total_pri - idle_pri;
-		}
-		dev_dbg(&data->pdev_ddr->dev,
-			"t_pri %u, t_sec %u, i_pri %u, i_sec %u\n",
-			total_pri, total_sec,
-			idle_pri, idle_sec);
-	} else {
-		dev_dbg(&data->pdev_ddr->dev, "interleave is off\n");
-		*total = total_pri;
-		*busy = total_pri - idle_pri;
-		dev_dbg(&data->pdev_ddr->dev,
-			"t_pri %u, i_pri %u\n",
-			total_pri, idle_pri);
-	}
+	spin_lock_irqsave(&data->lock, flags);
+	/* stop counters, to keep data synchronized */
+	stop_ddr_performance_counter();
+	*total_ticks = readl(mc_base + PERF_CNT_0_REG);
+	*data_ticks = readl(mc_base + PERF_CNT_2_REG) * 4;
+	start_ddr_performance_counter();
+	spin_unlock_irqrestore(&data->lock, flags);
+
+	time_stamp_cur = sched_clock();
+	diff_ms = (unsigned int)(time_stamp_cur - time_stamp_old) / 1000000;
+	time_stamp_old = time_stamp_cur;
+
+	/*
+	 * When the diff_ms is too small or too big, it's not suitable to
+	 * caculate the speed. In this case, we set the speed to -1
+	 * deliberately, so that the throughput governor will not use the
+	 * speed this time.
+	 */
+	if ((diff_ms >= 50) && (diff_ms < 5000))
+		*speed = *data_ticks / diff_ms;
+	else
+		*speed = -1;
 }
 
 /* reset both mc1 and mc0 */
 static void reset_ddr_counters(struct ddr_devfreq_data *data)
 {
 	reset_mc_cnt(data->mc_base_pri, data);
-
-	if (data->interleave_is_on)
-		reset_mc_cnt(data->mc_base_sec, data);
 }
 
 static int ddr_get_dev_status(struct device *dev,
@@ -356,12 +377,12 @@ static int ddr_get_dev_status(struct device *dev,
 		return -EINVAL;
 	}
 
-	get_ddr_cycles(data, &stat->total_time, &stat->busy_time);
-	data->last_polled_at = now;
-
+	get_ddr_cycles(data, &stat->total_time,
+			&stat->busy_time, &stat->throughput);
 	if (is_ddr_stats_working)
 		update_ddr_performance_data();
 	reset_ddr_counters(data);
+	data->last_polled_at = now;
 
 	/* Ajust the workload calculation here to align with devfreq governor */
 	if (stat->busy_time >= (1 << 24) || stat->total_time >= (1 << 24)) {
@@ -377,8 +398,12 @@ static int ddr_get_dev_status(struct device *dev,
 	dev_dbg(dev, "total time is 0x%x, %u\n\n",
 		(u32)stat->total_time,
 		(u32)stat->total_time);
+	dev_dbg(dev, "throughput is 0x%x, throughput * 8 (speed) is %u\n\n",
+		(u32)stat->throughput, 8 * stat->throughput);
 
-	trace_pxa_ddr_workload(workload, stat->current_frequency);
+	trace_pxa_ddr_workload(workload, stat->current_frequency,
+				stat->throughput);
+
 	return 0;
 }
 
@@ -452,6 +477,78 @@ static int ddr_target(struct device *dev, unsigned long *freq, u32 flags)
 
 	*freq = clk_get_rate(data->ddr_clk) / KHZ_TO_HZ;
 	return 0;
+}
+
+/* interface to change the switch point of high aggresive upthreshold */
+static ssize_t high_swp_store(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct platform_device *pdev;
+	struct ddr_devfreq_data *data;
+	struct devfreq *devfreq;
+	unsigned int swp;
+
+	pdev = container_of(dev, struct platform_device, dev);
+	data = platform_get_drvdata(pdev);
+	devfreq = data->pdev_ddr;
+
+	if (0x1 != sscanf(buf, "%u", &swp)) {
+		dev_err(dev, "<ERR> wrong parameter\n");
+		return -E2BIG;
+	}
+
+	mutex_lock(&devfreq->lock);
+	data->high_upthrd_swp = swp;
+	mutex_unlock(&devfreq->lock);
+
+	return size;
+}
+
+static ssize_t high_swp_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct platform_device *pdev;
+	struct ddr_devfreq_data *data;
+
+	pdev = container_of(dev, struct platform_device, dev);
+	data = platform_get_drvdata(pdev);
+	return sprintf(buf, "%u\n", data->high_upthrd_swp);
+}
+
+/* interface to change the aggresive upthreshold value */
+static ssize_t high_upthrd_store(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct platform_device *pdev;
+	struct ddr_devfreq_data *data;
+	struct devfreq *devfreq;
+	unsigned int high_upthrd;
+
+	pdev = container_of(dev, struct platform_device, dev);
+	data = platform_get_drvdata(pdev);
+	devfreq = data->pdev_ddr;
+
+	if (0x1 != sscanf(buf, "%u", &high_upthrd)) {
+		dev_err(dev, "<ERR> wrong parameter\n");
+		return -E2BIG;
+	}
+
+	mutex_lock(&devfreq->lock);
+	data->high_upthrd = high_upthrd;
+	mutex_unlock(&devfreq->lock);
+
+	return size;
+}
+
+static ssize_t high_upthrd_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
+{
+	struct platform_device *pdev;
+	struct ddr_devfreq_data *data;
+
+	pdev = container_of(dev, struct platform_device, dev);
+	data = platform_get_drvdata(pdev);
+	return sprintf(buf, "%u\n", data->high_upthrd);
 }
 
 /* debug interface used to totally disable ddr fc */
@@ -695,16 +792,93 @@ static ssize_t dp_store(struct device *dev, struct device_attribute *attr,
 	return size;
 }
 
+static struct pm_qos_request ddrfreq_qos_req_max;
+static ssize_t ddr_max_store(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t size)
+{
+	struct platform_device *pdev;
+	struct ddr_devfreq_data *data;
+	int max_level, min_level = PM_QOS_DEFAULT_VALUE;
+	struct list_head *list_min;
+	struct plist_node *node;
+	struct pm_qos_request *req;
+
+	static int inited;
+	pdev = container_of(dev, struct platform_device, dev);
+	data = platform_get_drvdata(pdev);
+
+
+	if (0x1 != sscanf(buf, "%d", &max_level)) {
+		dev_err(dev, "<ERR> wrong parameter, "\
+			"echo level > ddr_max to set max ddr rate\n");
+		return -E2BIG;
+	}
+	if (!inited) {
+		ddrfreq_qos_req_max.name = "DIP";
+		pm_qos_add_request(&ddrfreq_qos_req_max,
+				PM_QOS_DDR_DEVFREQ_MAX,
+				PM_QOS_DEFAULT_VALUE);
+		inited = 1;
+	}
+	if (cur_data->ddr_freq_tbl[cur_data->ddr_freq_tbl_len - 2] > 400000000) {
+		if (max_level >= 3)
+			max_level = 4;
+	}
+	if (max_level == 1)
+		max_level = 2;
+
+	list_min = &pm_qos_array[PM_QOS_DDR_DEVFREQ_MIN]->constraints->list.node_list;
+	list_for_each_entry(node, list_min, node_list) {
+		req = container_of(node, struct pm_qos_request, node);
+		if (req->name && !strcmp(req->name, "cp")) {
+			min_level = node->prio;
+			break;
+		}
+	}
+	if ((max_level == PM_QOS_DEFAULT_VALUE) || (max_level >= min_level))
+		pm_qos_update_request(&ddrfreq_qos_req_max, max_level);
+
+	return size;
+}
+
+static DEVICE_ATTR(high_upthrd_swp, S_IRUGO | S_IWUSR, \
+	high_swp_show, high_swp_store);
+static DEVICE_ATTR(high_upthrd, S_IRUGO | S_IWUSR, \
+	high_upthrd_show, high_upthrd_store);
 static DEVICE_ATTR(disable_ddr_fc, S_IRUGO | S_IWUSR, \
 	disable_show, disable_store);
 static DEVICE_ATTR(ddr_freq, S_IRUGO | S_IWUSR, ddr_freq_show, ddr_freq_store);
 static DEVICE_ATTR(ddr_profiling, S_IRUGO | S_IWUSR, dp_show, dp_store);
+static DEVICE_ATTR(ddr_max, S_IRUGO | S_IWUSR, NULL, ddr_max_store);
 
 static struct devfreq_dev_profile ddr_devfreq_profile = {
 	/* FIXME turn off profiling until ddr devfreq tests are completed */
 	.polling_ms = 0,
 	.target = ddr_target,
 	.get_dev_status = ddr_get_dev_status,
+};
+
+static int ddr_reboot_notify(struct notifier_block *nb,
+	unsigned long event, void *dummy)
+{
+	struct devfreq *df = cur_data->pdev_ddr;
+	mutex_lock(&df->lock);
+	/* scaling to the min frequency before reboot/powerdown */
+	ddr_set_rate(cur_data, cur_data->ddr_freq_tbl[0]);
+	/* disable profiling and all request from userspace */
+	df->profile->polling_ms = 0;
+	if (likely(!atomic_read(&cur_data->is_disabled)))
+		atomic_inc(&cur_data->is_disabled);
+	pr_info("%s: disable ddr freq-chg before reboot, cur"\
+		" rate %luKhz\n", __func__,
+		clk_get_rate(cur_data->ddr_clk) / KHZ_TO_HZ);
+	mutex_unlock(&df->lock);
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block ddr_devfreq_reboot_notifier = {
+	.notifier_call = ddr_reboot_notify,
+	.priority = 99,
 };
 
 static int ddr_devfreq_probe(struct platform_device *pdev)
@@ -736,10 +910,7 @@ static int ddr_devfreq_probe(struct platform_device *pdev)
 		goto err_clk_get;
 	}
 
-	data->interleave_is_on = pdata->interleave_is_on;
 	data->mc_base_pri = pdata->hw_base[0];
-	if (data->interleave_is_on)
-		data->mc_base_sec = pdata->hw_base[1];
 
 	/* save ddr frequency tbl */
 	if (pdata->freq_table != NULL) {
@@ -749,6 +920,29 @@ static int ddr_devfreq_probe(struct platform_device *pdev)
 		}
 		data->ddr_freq_tbl_len = i;
 	}
+
+#ifdef CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT
+	devfreq_gov_data.table_len = data->ddr_freq_tbl_len;
+	devfreq_gov_data.freq_table = data->ddr_freq_tbl;
+
+	devfreq_gov_data.throughput_table =
+				kzalloc(devfreq_gov_data.table_len
+			* sizeof(struct throughput_threshold), GFP_KERNEL);
+	if (NULL == devfreq_gov_data.throughput_table) {
+		dev_err(dev,
+			"Cannot allocate memory for throughput table\n");
+		goto err_alloc_throughput_table;
+	}
+
+	for (i = 0; i < devfreq_gov_data.table_len; i++) {
+		devfreq_gov_data.throughput_table[i].up =
+		   DDR_DEVFREQ_UPTHRESHOLD * data->ddr_freq_tbl[i] / 100;
+		devfreq_gov_data.throughput_table[i].down =
+		   (DDR_DEVFREQ_UPTHRESHOLD - DDR_DEVFREQ_DOWNDIFFERENTIAL)
+		   * data->ddr_freq_tbl[i] / 100;
+	}
+#endif /* CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT */
+
 	spin_lock_init(&data->lock);
 
 	ddr_devfreq_profile.initial_freq =
@@ -759,19 +953,29 @@ static int ddr_devfreq_probe(struct platform_device *pdev)
 		ddr_devfreq_profile.qos_list = pdata->qos_list;
 	}
 
-	data->pdev_ddr = devfreq_add_device(&pdev->dev,
-				       &ddr_devfreq_profile,
-				       default_gov, &ddr_ondemand_data);
+	data->pdev_ddr = devfreq_add_device(&pdev->dev, &ddr_devfreq_profile,
+				DEVFREQ_DEFAULT_GOVERNOR, DEVFREQ_GOV_DATA);
 	if (IS_ERR(data->pdev_ddr)) {
 		dev_err(dev, "devfreq add error !\n");
 		ret =  (unsigned long)data->pdev_ddr;
 		goto err_devfreq_add;
 	}
 
+	data->high_upthrd_swp = 800000;
+	data->high_upthrd = 30;
+
 	/* init default devfreq min_freq and max_freq */
-	data->pdev_ddr->min_freq = data->ddr_freq_tbl[0];
-	data->pdev_ddr->max_freq =
-		data->ddr_freq_tbl[data->ddr_freq_tbl_len - 1];
+	if ((data->ddr_freq_tbl_len > 0) &&
+		(data->ddr_freq_tbl_len <= DDR_FREQ_MAX)) {
+		data->pdev_ddr->min_freq = data->pdev_ddr->qos_min_freq =
+			data->ddr_freq_tbl[0];
+		data->pdev_ddr->max_freq = data->pdev_ddr->qos_max_freq =
+			data->ddr_freq_tbl[data->ddr_freq_tbl_len - 1];
+	} else {
+		dev_err(dev, "invalid ddr freq_table length!\n");
+		ret = -EINVAL;
+		goto err_devfreq_add;
+	}
 	data->last_polled_at = jiffies;
 
 	/* Pass the frequency table to devfreq framework */
@@ -800,12 +1004,53 @@ static int ddr_devfreq_probe(struct platform_device *pdev)
 		ret = -ENOENT;
 		goto err_file_create2;
 	}
+
+	res = device_create_file(&pdev->dev, &dev_attr_ddr_max);
+	if (res) {
+		dev_err(dev, \
+			"device attr ddr_max create fail: %d\n", res);
+		ret = -ENOENT;
+		goto err_file_create4;
+	}
+		
+	res = device_create_file(&pdev->dev, &dev_attr_high_upthrd_swp);
+	if (res) {
+		dev_err(dev, \
+			"device attr high_upthrd_swp create fail: %d\n", res);
+		ret = -ENOENT;
+		goto err_file_create5;
+	}
+
+	res = device_create_file(&pdev->dev, &dev_attr_high_upthrd);
+	if (res) {
+		dev_err(dev, \
+			"device attr high_upthrd create fail: %d\n", res);
+		ret = -ENOENT;
+		goto err_file_create6;
+	}
+
 	cur_data = data;
 	platform_set_drvdata(pdev, data);
 	dvfs_register_notifier(&notifier_freq_block, DVFS_FREQUENCY_NOTIFIER);
+	register_reboot_notifier(&ddr_devfreq_reboot_notifier);
+#ifdef CONFIG_DDR_DEVFREQ_GOV_ONDEMAND
+	/*
+	 * register the notifier to cpufreq driver,
+	 * it is triggered when core freq-chg is done
+	 */
+	cpufreq_register_notifier(&upthreshold_freq_notifier,
+		CPUFREQ_TRANSITION_NOTIFIER);
+#endif
+
 	ddr_perf_counter_init();
 	return 0;
-
+	
+err_file_create6:
+	device_remove_file(&pdev->dev, &dev_attr_high_upthrd);
+err_file_create5:
+	device_remove_file(&pdev->dev, &dev_attr_high_upthrd_swp);
+err_file_create4:
+	device_remove_file(&pdev->dev, &dev_attr_ddr_max);
 err_file_create2:
 	device_remove_file(&pdev->dev, &dev_attr_ddr_freq);
 err_file_create1:
@@ -813,6 +1058,12 @@ err_file_create1:
 err_file_create0:
 	devfreq_remove_device(data->pdev_ddr);
 err_devfreq_add:
+
+#ifdef CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT
+	kfree(devfreq_gov_data.throughput_table);
+err_alloc_throughput_table:
+#endif /* CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT */
+
 err_clk_get:
 	kfree(data);
 	return ret;
@@ -825,9 +1076,18 @@ static int ddr_devfreq_remove(struct platform_device *pdev)
 	device_remove_file(&pdev->dev, &dev_attr_disable_ddr_fc);
 	device_remove_file(&pdev->dev, &dev_attr_ddr_freq);
 	device_remove_file(&pdev->dev, &dev_attr_ddr_profiling);
+	device_remove_file(&pdev->dev, &dev_attr_ddr_max);
+	device_remove_file(&pdev->dev, &dev_attr_high_upthrd_swp);
+	device_remove_file(&pdev->dev, &dev_attr_high_upthrd);
 	devfreq_remove_device(data->pdev_ddr);
+
+#ifdef CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT
+	kfree(devfreq_gov_data.throughput_table);
+#endif /* CONFIG_DDR_DEVFREQ_GOV_THROUGHPUT */
+
 	kfree(data);
 	dvfs_unregister_notifier(&notifier_freq_block, DVFS_FREQUENCY_NOTIFIER);
+	unregister_reboot_notifier(&ddr_devfreq_reboot_notifier);
 	return 0;
 }
 

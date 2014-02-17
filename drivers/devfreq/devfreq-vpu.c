@@ -72,6 +72,7 @@ static int vpu_devfreq_probe(struct platform_device *pdev)
 	struct vpu_devfreq_data *data = NULL;
 	struct devfreq_platform_data *pdata;
 	int err = 0;
+	int i = 0;
 	struct device *dev = &pdev->dev;
 	pdata = (struct devfreq_platform_data *)dev->platform_data;
 	if (!pdata) {
@@ -105,8 +106,14 @@ static int vpu_devfreq_probe(struct platform_device *pdev)
 
 	dvfs_register_notifier(&notifier_freq_block, DVFS_FREQUENCY_NOTIFIER);
 
-	if (pdata->freq_table)
+	if (pdata->freq_table) {
 		devfreq_set_freq_table(data->devfreq, pdata->freq_table);
+
+		while (pdata->freq_table[i].frequency != DEVFREQ_TABLE_END)
+			i++;
+		data->devfreq->max_freq = data->devfreq->qos_max_freq = pdata->freq_table[i-1].frequency;
+		data->devfreq->min_freq = data->devfreq->qos_min_freq = pdata->freq_table[0].frequency;
+	}
 
 	return 0;
 out:

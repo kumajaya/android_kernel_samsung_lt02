@@ -63,7 +63,7 @@ static int devfreq_simple_ondemand_func(struct devfreq *df,
 		stat.total_time >>= 7;
 	}
 
-#ifndef CONFIG_CPU_PXA988
+#if !defined(CONFIG_CPU_PXA988)
 	/* Set MAX if it's busy enough */
 	if (stat.busy_time * 100 >
 	    stat.total_time * dfso_upthreshold) {
