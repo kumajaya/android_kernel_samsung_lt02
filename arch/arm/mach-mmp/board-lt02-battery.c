@@ -142,7 +142,7 @@ static int battery_get_lpm_state(char *str)
 __setup("lpcharge=", battery_get_lpm_state);
 
 /* For KitKat bootloader compatibility */
-static int battery_get_lpm_state(char *str)
+static int bootloader_get_lpm_state(char *str)
 {
 	if (strncmp(str, "charger", 7) == 0)
 		lpcharge = 1;
@@ -151,7 +151,7 @@ static int battery_get_lpm_state(char *str)
 
 	return lpcharge;
 }
-__setup("androidboot.mode=", battery_get_lpm_state);
+__setup("androidboot.mode=", bootloader_get_lpm_state);
 
 static bool sec_bat_is_lpm(void)
 {
